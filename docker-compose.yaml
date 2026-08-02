@@ -19,6 +19,26 @@ services:
     networks:
       - data_net
 
+  migrate:
+    build:
+      context: ./services/api
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-jim007}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-jim007}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?Set INTERNAL_API_TOKEN in .env}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_MODEL: ${LLM_MODEL:?Set LLM_MODEL in .env}
+      LLM_API_KEY: ${LLM_API_KEY:?Set LLM_API_KEY in .env}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - data_net
+
   api:
     build:
       context: ./services/api
@@ -35,14 +55,14 @@ services:
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=2)"
       interval: 10s
       timeout: 5s
       retries: 5
