@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.infrastructure.database.repositories import (
     SqlAlchemyExerciseRepository,
+    SqlAlchemyExternalIdentityRepository,
     SqlAlchemyProcessedCommandRepository,
     SqlAlchemyUserRepository,
     SqlAlchemyWorkoutRepository,
@@ -19,6 +20,7 @@ class SqlAlchemyUnitOfWork:
     async def __aenter__(self) -> "SqlAlchemyUnitOfWork":
         self._session = self._session_factory()
         self.users = SqlAlchemyUserRepository(self._session)
+        self.external_identities = SqlAlchemyExternalIdentityRepository(self._session)
         self.exercises = SqlAlchemyExerciseRepository(self._session)
         self.workouts = SqlAlchemyWorkoutRepository(self._session)
         self.processed_commands = SqlAlchemyProcessedCommandRepository(self._session)

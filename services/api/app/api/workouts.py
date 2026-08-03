@@ -2,13 +2,13 @@
 
 import hashlib
 import json
-from functools import partial
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 
 from app.api.auth import require_internal_token
+from app.api.dependencies import UowFactory, get_uow_factory
 from app.api.schemas import (
     AddExerciseRequest,
     CreateWorkoutRequest,
@@ -23,20 +23,11 @@ from app.application.commands import (
     CreateWorkoutCommand,
 )
 from app.application.services import AddExerciseToWorkout, CompleteWorkout, CreateWorkout
-from app.application.ports import UnitOfWorkFactory
-from app.infrastructure.database.session import session_factory
-from app.infrastructure.database.uow import SqlAlchemyUnitOfWork
-
-
 router = APIRouter(
     prefix="/users/{user_id}/workouts",
     tags=["workouts"],
     dependencies=[Depends(require_internal_token)],
 )
-
-
-def get_uow_factory() -> UnitOfWorkFactory:
-    return partial(SqlAlchemyUnitOfWork, session_factory)
 
 
 def _request_hash(operation: str, path_values: dict[str, UUID], payload: object) -> str:
@@ -66,9 +57,6 @@ def _idempotency_key(
 
 
 IdempotencyKey = Annotated[str, Depends(_idempotency_key)]
-UowFactory = Annotated[UnitOfWorkFactory, Depends(get_uow_factory)]
-
-
 @router.post("", response_model=WorkoutResponse, status_code=status.HTTP_201_CREATED)
 async def create_workout(
     user_id: UUID,

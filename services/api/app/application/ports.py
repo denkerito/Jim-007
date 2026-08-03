@@ -8,7 +8,15 @@ from datetime import date
 from typing import Protocol
 from uuid import UUID
 
-from app.domain.models import Exercise, Load, User, Workout, WorkoutExercise
+from app.domain.models import (
+    Exercise,
+    ExternalIdentity,
+    Load,
+    LoadUnit,
+    User,
+    Workout,
+    WorkoutExercise,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +30,44 @@ class ProcessedCommand:
 
 class UserRepository(Protocol):
     async def get_by_id(self, user_id: UUID) -> User | None: ...
+
+    async def create(
+        self,
+        *,
+        user_id: UUID,
+        locale: str,
+        timezone: str,
+        preferred_load_unit: LoadUnit,
+    ) -> User: ...
+
+
+class ExternalIdentityRepository(Protocol):
+    async def acquire_registration_lock(
+        self, provider: str, provider_subject: str
+    ) -> None: ...
+
+    async def get_by_provider_subject(
+        self, provider: str, provider_subject: str
+    ) -> ExternalIdentity | None: ...
+
+    async def create(
+        self,
+        *,
+        identity_id: UUID,
+        user_id: UUID,
+        provider: str,
+        provider_subject: str,
+        username: str | None,
+        display_name: str | None,
+    ) -> ExternalIdentity: ...
+
+    async def update_profile(
+        self,
+        identity_id: UUID,
+        *,
+        username: str | None,
+        display_name: str | None,
+    ) -> ExternalIdentity: ...
 
 
 class ExerciseRepository(Protocol):
@@ -74,6 +120,7 @@ class ProcessedCommandRepository(Protocol):
 
 class UnitOfWork(Protocol):
     users: UserRepository
+    external_identities: ExternalIdentityRepository
     exercises: ExerciseRepository
     workouts: WorkoutRepository
     processed_commands: ProcessedCommandRepository

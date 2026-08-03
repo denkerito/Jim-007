@@ -8,7 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.domain.models import LoadUnit, Workout, WorkoutExercise
+from app.domain.models import ExternalIdentity, LoadUnit, User, Workout, WorkoutExercise
 
 
 class CommandModel(BaseModel):
@@ -74,6 +74,27 @@ class CompleteWorkoutCommand(CommandModel):
     workout_id: UUID
     idempotency_key: str = Field(min_length=1, max_length=255)
     request_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class RegisterExternalIdentityCommand(CommandModel):
+    provider: str = Field(min_length=1, max_length=32)
+    provider_subject: str = Field(min_length=1, max_length=255)
+    username: str | None = Field(default=None, max_length=255)
+    display_name: str | None = Field(default=None, max_length=255)
+
+    @field_validator("provider", "provider_subject")
+    @classmethod
+    def identity_text_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
+@dataclass(frozen=True, slots=True)
+class RegistrationResult:
+    user: User
+    identity: ExternalIdentity
+    created: bool
 
 
 ResultT = TypeVar("ResultT", Workout, WorkoutExercise)

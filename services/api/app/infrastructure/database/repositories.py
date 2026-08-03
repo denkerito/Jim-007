@@ -10,9 +10,23 @@ from sqlalchemy.orm import selectinload
 
 from app.application.ports import ProcessedCommand as CommandRecord
 from app.domain.exceptions import ActiveWorkoutExistsError
-from app.domain.models import Exercise, Load, User, Workout, WorkoutExercise
+from app.domain.models import (
+    Exercise,
+    ExternalIdentity,
+    Load,
+    LoadUnit,
+    User,
+    Workout,
+    WorkoutExercise,
+)
 from app.infrastructure.database import models as orm
-from app.infrastructure.database.mappers import to_exercise, to_user, to_workout, to_workout_exercise
+from app.infrastructure.database.mappers import (
+    to_exercise,
+    to_external_identity,
+    to_user,
+    to_workout,
+    to_workout_exercise,
+)
 
 
 def _workout_options() -> tuple[object, ...]:
@@ -29,6 +43,88 @@ class SqlAlchemyUserRepository:
     async def get_by_id(self, user_id: UUID) -> User | None:
         model = await self._session.get(orm.AppUser, user_id)
         return to_user(model) if model is not None else None
+
+    async def create(
+        self,
+        *,
+        user_id: UUID,
+        locale: str,
+        timezone: str,
+        preferred_load_unit: LoadUnit,
+    ) -> User:
+        model = orm.AppUser(
+            id=user_id,
+            locale=locale,
+            timezone=timezone,
+            preferred_load_unit=preferred_load_unit.value,
+        )
+        self._session.add(model)
+        await self._session.flush()
+        await self._session.refresh(model)
+        return to_user(model)
+
+
+class SqlAlchemyExternalIdentityRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def acquire_registration_lock(
+        self, provider: str, provider_subject: str
+    ) -> None:
+        lock_value = f"{provider}\x1f{provider_subject}"
+        await self._session.execute(
+            select(func.pg_advisory_xact_lock(func.hashtextextended(lock_value, 0)))
+        )
+
+    async def get_by_provider_subject(
+        self, provider: str, provider_subject: str
+    ) -> ExternalIdentity | None:
+        model = await self._session.scalar(
+            select(orm.ExternalIdentity).where(
+                orm.ExternalIdentity.provider == provider,
+                orm.ExternalIdentity.provider_subject == provider_subject,
+            )
+        )
+        return to_external_identity(model) if model is not None else None
+
+    async def create(
+        self,
+        *,
+        identity_id: UUID,
+        user_id: UUID,
+        provider: str,
+        provider_subject: str,
+        username: str | None,
+        display_name: str | None,
+    ) -> ExternalIdentity:
+        model = orm.ExternalIdentity(
+            id=identity_id,
+            user_id=user_id,
+            provider=provider,
+            provider_subject=provider_subject,
+            username=username,
+            display_name=display_name,
+        )
+        self._session.add(model)
+        await self._session.flush()
+        await self._session.refresh(model)
+        return to_external_identity(model)
+
+    async def update_profile(
+        self,
+        identity_id: UUID,
+        *,
+        username: str | None,
+        display_name: str | None,
+    ) -> ExternalIdentity:
+        model = await self._session.get(orm.ExternalIdentity, identity_id)
+        if model is None:
+            raise RuntimeError("External identity disappeared during registration")
+        model.username = username
+        model.display_name = display_name
+        await self._session.flush()
+        await self._session.refresh(model)
+        return to_external_identity(model)
 
 
 class SqlAlchemyExerciseRepository:
