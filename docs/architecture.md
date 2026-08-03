@@ -18,6 +18,11 @@ Telegram -> Telegram Bot -> HTTP -> FastAPI -> PostgreSQL
 
 Il bot non accede direttamente al database e non contiene logica di dominio. Comunica con FastAPI attraverso un contratto HTTP e un token interno. FastAPI e inoltre il backend della futura web application.
 
+Il comando Telegram `/start`, accettato solo in chat privata, registra o risolve
+l'identita esterna tramite `POST /internal/identities/telegram`. FastAPI usa la
+coppia stabile `(provider, provider_subject)` per collegarla a un utente applicativo
+e aggiorna soltanto i metadati descrittivi Telegram nelle registrazioni successive.
+
 ## Layer dell'API
 
 Il backend separa esplicitamente quattro responsabilita:
