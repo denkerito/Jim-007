@@ -42,7 +42,7 @@ messaggio dell'utente.
 
 L'output del LLM deve essere validato dall'applicazione prima di poter essere persistito nel database
 
-Il logging di un workout non richiede una sessione di allenamento stateful: un workout completo può essere descritto e registrato attraverso un singolo messaggio.
+Il logging di un workout usa una sessione applicativa persistita. L'utente apre un workout, aggiunge un esercizio con i relativi set per ogni messaggio e lo chiude con un comando esplicito. Il workout rimane `draft` fino alla chiusura e non contribuisce a storico o statistiche.
 ```
 User:
 ieri ho fatto panca 80x8 80x8 80x7

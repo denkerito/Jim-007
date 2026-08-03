@@ -5,6 +5,8 @@ from fastapi import FastAPI, HTTPException, status
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.api.errors import install_error_handlers
+from app.api.workouts import router as workouts_router
 from app.config import get_settings
 from app.infrastructure.database.session import engine
 
@@ -19,6 +21,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="JIM007 API", version="0.1.0", lifespan=lifespan)
+install_error_handlers(app)
+app.include_router(workouts_router)
 
 
 @app.get("/health/live", tags=["system"])

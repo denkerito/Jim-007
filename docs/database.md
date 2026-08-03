@@ -20,7 +20,8 @@ Il database contiene dati applicativi strutturati. Il bot Telegram e il provider
 - catalogo personale degli esercizi;
 - invio al LLM del catalogo personale, composto da qualche decina di esercizi;
 - creazione automatica di un esercizio sconosciuto;
-- registrazione di un workout completo da un singolo messaggio;
+- creazione incrementale di un workout, con un esercizio e i relativi set per messaggio;
+- ciclo di vita esplicito `draft -> completed` e un solo draft attivo per utente;
 - data del workout esplicita o relativa, con default alla data locale corrente;
 - esercizi ordinati all'interno del workout;
 - una riga persistita per ogni set eseguito;
@@ -115,19 +116,21 @@ Non sono presenti alias persistenti nell'MVP. Il catalogo personale, composto da
 - riferimento a un esercizio esistente;
 - proposta di un nuovo esercizio.
 
-Un nuovo esercizio viene creato automaticamente nella stessa transazione del workout. Prima della creazione, l'applicazione normalizza nuovamente il nome e verifica che non esista gia.
+Un nuovo esercizio viene creato automaticamente nella stessa transazione che aggiunge la relativa occorrenza al workout. Prima della creazione, l'applicazione normalizza nuovamente il nome e verifica che non esista gia.
 
 ### 3.5 Workout
 
-`Workout` e l'aggregate root della registrazione di un allenamento completato.
+`Workout` e l'aggregate root della registrazione incrementale di un allenamento.
 
 Contiene:
 
 - l'utente proprietario;
 - la data locale di esecuzione;
 - eventuali note generali;
-- l'idempotency key della richiesta che lo ha creato;
+- lo stato `draft` o `completed`;
 - la data e ora di registrazione nel sistema.
+
+Un nuovo workout nasce `draft`, puo ricevere blocchi `WorkoutExercise` con almeno un set e diventa `completed` solo attraverso un comando esplicito. Ogni utente puo avere un solo draft attivo. I workout completati non sono modificabili nell'MVP e solo questi partecipano a history e statistiche.
 
 `performed_on` e una `DATE`, non un timestamp. Rappresenta il giorno di esecuzione secondo la timezone dell'utente. `created_at` rappresenta invece il momento in cui il workout e stato salvato e puo essere successivo a `performed_on`.
 
@@ -204,7 +207,7 @@ Il LLM non e considerato una fonte affidabile di ID, conversioni matematiche o r
 
 ### 3.9 Idempotenza
 
-Telegram puo inviare nuovamente lo stesso update quando non riceve una risposta valida o tempestiva. Ogni comando di creazione contiene quindi una `idempotency_key` stabile derivata dall'evento esterno, per esempio:
+Telegram puo inviare nuovamente lo stesso update quando non riceve una risposta valida o tempestiva. Ogni comando di scrittura contiene quindi una `idempotency_key` stabile derivata dall'evento esterno, per esempio:
 
 ```text
 telegram:<bot>:update:<update_id>
@@ -212,9 +215,11 @@ telegram:<bot>:update:<update_id>
 
 La chiave e opaca per il dominio e non viene calcolata dal testo del messaggio. Due messaggi uguali inviati intenzionalmente devono poter produrre due workout differenti.
 
-Il vincolo univoco sulla chiave garantisce che due elaborazioni dello stesso evento, anche concorrenti, non possano creare due workout. Se la chiave esiste gia, l'applicazione recupera il workout precedente e restituisce una risposta equivalente.
+Il vincolo univoco sulla chiave garantisce che due elaborazioni dello stesso evento, anche concorrenti, non possano applicare due volte la stessa operazione. Se la chiave esiste gia con lo stesso utente, operazione e hash della richiesta, l'applicazione recupera la risorsa precedente e restituisce una risposta equivalente.
 
-Nell'MVP la chiave e memorizzata direttamente su `workout`, dato che ogni comando di scrittura crea al massimo un workout. Una futura tabella generica per le richieste elaborate sara necessaria solo per rendere idempotenti anche comandi che non producono workout.
+La chiave e memorizzata in `processed_command`, nella stessa transazione della modifica. Un riuso con utente, operazione o hash differenti produce un conflitto. Se la transazione fallisce, anche la claim viene annullata e la richiesta puo essere ritentata.
+
+Le chiavi create prima dell'introduzione dell'hash vengono migrate come `legacy_create_workout`: non essendo ricostruibile il payload HTTP originale, un replay con la stessa chiave e lo stesso utente restituisce il workout storico senza applicare nuovamente il comando.
 
 ### 3.10 Record, statistiche e history
 
@@ -264,7 +269,7 @@ In quel momento potranno essere aggiunti:
 
 ### 4.4 Annullamento dei workout
 
-Un futuro `workout.status`, con valori come `active` e `voided`, potra escludere un workout errato o duplicato da history e statistiche senza cancellarlo fisicamente.
+Lo stato corrente distingue `draft` e `completed`. Una futura estensione con `voided` potra escludere un workout errato o duplicato da history e statistiche senza cancellarlo fisicamente.
 
 ### 4.5 Alias e catalogo canonico
 
@@ -358,15 +363,17 @@ Un esercizio referenziato da un workout usa `ON DELETE RESTRICT`. La cancellazio
 | `user_id` | `UUID` | no | - | Proprietario |
 | `performed_on` | `DATE` | no | - | Data locale dell'allenamento |
 | `notes` | `TEXT` | si | - | Note generali |
-| `idempotency_key` | `VARCHAR(255)` | no | - | Identificatore opaco della richiesta di creazione |
+| `status` | `VARCHAR(16)` | no | `draft` | Stato del workflow: `draft` o `completed` |
 | `created_at` | `TIMESTAMPTZ` | no | current timestamp | Momento del salvataggio |
+| `completed_at` | `TIMESTAMPTZ` | si | - | Momento del completamento esplicito |
 
 Vincoli:
 
 - primary key su `id`;
 - foreign key `user_id -> app_user.id`;
-- unique `idempotency_key`;
 - unique `(user_id, id)` per consentire foreign key composite di ownership;
+- unique parziale su `user_id` quando `status = 'draft'`;
+- check di coerenza: un draft non ha `completed_at`, un completed lo richiede;
 - nessuna unicita su `(user_id, performed_on)`;
 - eventuale divieto delle date future applicato dall'application service, non tramite check dipendente dalla data corrente.
 
@@ -435,6 +442,19 @@ La conversione viene effettuata e validata dall'applicazione usando fattori dete
 
 Politica di cancellazione proposta: `ON DELETE CASCADE` da `workout_exercise` a `performed_set`, perche il set non esiste fuori dal proprio aggregate.
 
+### 5.8 `processed_command`
+
+| Colonna | Tipo | Null | Descrizione |
+|---|---|---:|---|
+| `idempotency_key` | `VARCHAR(255)` | no | Chiave opaca e globalmente univoca |
+| `user_id` | `UUID` | no | Utente che ha emesso il comando |
+| `operation` | `VARCHAR(64)` | no | Tipo di comando applicativo |
+| `request_hash` | `VARCHAR(64)` | no | SHA-256 del comando canonico |
+| `resource_id` | `UUID` | no | Risorsa restituita dal comando |
+| `created_at` | `TIMESTAMPTZ` | no | Momento dell'elaborazione |
+
+La tabella non usa una foreign key polimorfica su `resource_id`; la risorsa viene interpretata in base a `operation`. Record e modifica applicativa vengono sempre salvati nella stessa transazione.
+
 ## 6. Relazioni e politiche referenziali
 
 | Padre | Figlio | Cardinalita | Politica proposta |
@@ -450,16 +470,12 @@ L'eliminazione di un account e un caso separato che dovra essere implementato co
 
 ## 7. Invarianti transazionali
 
-La creazione di un workout avviene in una singola transazione e deve garantire che:
+Ogni comando applicativo usa una transazione distinta e una Unit of Work condivisa dai repository:
 
-1. l'idempotency key non sia gia stata applicata;
-2. tutti gli esercizi esistenti appartengano all'utente;
-3. gli esercizi sconosciuti vengano creati senza collisioni sul nome normalizzato;
-4. venga creato il workout;
-5. vengano create tutte le occorrenze `workout_exercise`;
-6. vengano creati tutti i `performed_set`;
-7. il commit avvenga solo se l'intero aggregate e valido.
+1. la creazione inserisce un workout `draft` e impedisce un secondo draft dello stesso utente;
+2. l'aggiunta blocca il workout, verifica stato e ownership, risolve o crea l'esercizio e salva insieme `WorkoutExercise` e tutti i `PerformedSet`;
+3. il completamento blocca e valida l'aggregate prima della transizione a `completed`;
+4. la claim idempotente viene inserita nella stessa transazione della risorsa risultante;
+5. il commit avviene soltanto quando l'intero comando e valido.
 
-Se una qualsiasi operazione fallisce, non devono rimanere workout parziali o nuovi esercizi orfani.
-
-In caso di conflitto sull'idempotency key, l'applicazione recupera e restituisce il workout gia creato. In caso di conflitto sul nome normalizzato di un nuovo esercizio, recupera l'esercizio esistente e verifica che possa essere utilizzato.
+Se una qualsiasi operazione fallisce non rimangono blocchi parziali, esercizi orfani o claim idempotenti senza risultato. Modifiche concorrenti allo stesso workout sono serializzate con un lock sulla root; le collisioni sui nomi normalizzati usano il vincolo univoco e un upsert PostgreSQL.

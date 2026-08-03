@@ -6,6 +6,7 @@ from app.infrastructure.database.models import (
     Exercise,
     ExternalIdentity,
     PerformedSet,
+    ProcessedCommand,
     Workout,
     WorkoutExercise,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "Exercise",
     "ExternalIdentity",
     "PerformedSet",
+    "ProcessedCommand",
     "Workout",
     "WorkoutExercise",
 ]

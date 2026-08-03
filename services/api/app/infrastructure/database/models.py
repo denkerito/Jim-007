@@ -18,7 +18,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.base import Base
 
@@ -111,10 +111,12 @@ class Exercise(Base):
 class Workout(Base):
     __tablename__ = "workout"
     __table_args__ = (
-        UniqueConstraint("idempotency_key"),
         UniqueConstraint("user_id", "id"),
+        CheckConstraint("status IN ('draft', 'completed')", name="status_supported"),
         CheckConstraint(
-            "btrim(idempotency_key) <> ''", name="idempotency_key_not_blank"
+            "(status = 'draft' AND completed_at IS NULL) OR "
+            "(status = 'completed' AND completed_at IS NOT NULL)",
+            name="status_completed_at_consistent",
         ),
     )
 
@@ -126,9 +128,18 @@ class Workout(Base):
     )
     performed_on: Mapped[date] = mapped_column(Date, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
-    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'draft'")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    exercises: Mapped[list["WorkoutExercise"]] = relationship(
+        back_populates="workout",
+        cascade="all, delete-orphan",
+        lazy="raise",
+        order_by="WorkoutExercise.position",
     )
 
 
@@ -137,6 +148,13 @@ Index(
     Workout.user_id,
     Workout.performed_on.desc(),
     Workout.created_at.desc(),
+)
+
+Index(
+    "uq_workout_one_draft_per_user",
+    Workout.user_id,
+    unique=True,
+    postgresql_where=Workout.status == "draft",
 )
 
 
@@ -170,6 +188,18 @@ class WorkoutExercise(Base):
     )
     position: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
+    workout: Mapped[Workout] = relationship(
+        back_populates="exercises", lazy="raise", overlaps="exercise"
+    )
+    exercise: Mapped[Exercise] = relationship(
+        lazy="raise", overlaps="exercises,workout"
+    )
+    sets: Mapped[list["PerformedSet"]] = relationship(
+        back_populates="workout_exercise",
+        cascade="all, delete-orphan",
+        lazy="raise",
+        order_by="PerformedSet.set_number",
+    )
 
 
 Index("ix_workout_exercise_user_id_exercise_id", WorkoutExercise.user_id, WorkoutExercise.exercise_id)
@@ -214,3 +244,28 @@ class PerformedSet(Base):
     load_unit: Mapped[str | None] = mapped_column(String(2))
     load_kg: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
     notes: Mapped[str | None] = mapped_column(Text)
+    workout_exercise: Mapped[WorkoutExercise] = relationship(
+        back_populates="sets", lazy="raise"
+    )
+
+
+class ProcessedCommand(Base):
+    __tablename__ = "processed_command"
+    __table_args__ = (
+        CheckConstraint("btrim(idempotency_key) <> ''", name="idempotency_key_not_blank"),
+        CheckConstraint("btrim(operation) <> ''", name="operation_not_blank"),
+        CheckConstraint("request_hash ~ '^[0-9a-f]{64}$'", name="request_hash_sha256"),
+    )
+
+    idempotency_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    user_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), ForeignKey("app_user.id"), nullable=False
+    )
+    operation: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
