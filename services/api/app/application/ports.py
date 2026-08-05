@@ -8,6 +8,12 @@ from datetime import date
 from typing import Protocol
 from uuid import UUID
 
+from app.application.commands import (
+    ExerciseCatalogItem,
+    WorkoutDateInterpretation,
+    WorkoutInterpretationContext,
+    WorkoutLogInterpretation,
+)
 from app.domain.models import (
     Exercise,
     ExternalIdentity,
@@ -71,6 +77,8 @@ class ExternalIdentityRepository(Protocol):
 
 
 class ExerciseRepository(Protocol):
+    async def list_for_user(self, user_id: UUID) -> tuple[Exercise, ...]: ...
+
     async def get_by_id(self, exercise_id: UUID, user_id: UUID) -> Exercise | None: ...
 
     async def get_by_normalized_name(
@@ -135,3 +143,20 @@ class UnitOfWork(Protocol):
 
 
 UnitOfWorkFactory = Callable[[], UnitOfWork]
+
+
+class WorkoutTextInterpreter(Protocol):
+    async def interpret_date(
+        self,
+        *,
+        text: str,
+        context: WorkoutInterpretationContext,
+    ) -> WorkoutDateInterpretation: ...
+
+    async def interpret_exercises(
+        self,
+        *,
+        text: str,
+        context: WorkoutInterpretationContext,
+        catalog: tuple[ExerciseCatalogItem, ...],
+    ) -> WorkoutLogInterpretation: ...

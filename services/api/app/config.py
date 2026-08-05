@@ -1,6 +1,7 @@
 from functools import lru_cache
+from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,10 +12,12 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     database_url: str
     internal_api_token: SecretStr
-    llm_provider: str
-    llm_model: str
-    llm_api_key: SecretStr
-    llm_base_url: str | None = None
+    llm_provider: str = "gemini"
+    llm_model: str = "gemini-3.5-flash-lite"
+    gemini_api_key: SecretStr | None = None
+    llm_timeout_seconds: float = Field(default=8.0, gt=0, le=60)
+    llm_max_output_tokens: int = Field(default=4096, gt=0, le=65536)
+    llm_thinking_level: Literal["minimal", "low", "medium", "high"] = "minimal"
 
 
 @lru_cache

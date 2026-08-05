@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.domain import models as domain
+from app.application.commands import WorkoutEventAction, WorkoutEventResult
 
 
 class ApiModel(BaseModel):
@@ -74,6 +75,22 @@ class AddExerciseRequest(ApiModel):
     notes: str | None = None
 
 
+class WorkoutEventRequest(ApiModel):
+    provider: str = Field(min_length=1, max_length=32)
+    provider_subject: str = Field(min_length=1, max_length=255)
+    action: WorkoutEventAction
+    text: str | None = Field(default=None, max_length=4096)
+
+    @model_validator(mode="after")
+    def action_must_match_text(self) -> "WorkoutEventRequest":
+        text = (self.text or "").strip()
+        if self.action is WorkoutEventAction.LOG and not text:
+            raise ValueError("log events require text")
+        if self.action is WorkoutEventAction.COMPLETE and self.text is not None:
+            raise ValueError("complete events do not accept text")
+        return self
+
+
 class LoadResponse(ApiModel):
     value: Decimal
     unit: domain.LoadUnit
@@ -111,6 +128,14 @@ class WorkoutResponse(ApiModel):
     created_at: datetime
     completed_at: datetime | None
     exercises: tuple[WorkoutExerciseResponse, ...]
+
+
+class WorkoutEventResponse(ApiModel):
+    kind: Literal["opened", "logged", "completed", "needs_clarification"]
+    replayed: bool = False
+    workout: WorkoutResponse | None = None
+    added_exercises: tuple[WorkoutExerciseResponse, ...] = ()
+    clarification_message: str | None = None
 
 
 def workout_exercise_response(value: domain.WorkoutExercise) -> WorkoutExerciseResponse:
@@ -154,4 +179,16 @@ def workout_response(value: domain.Workout) -> WorkoutResponse:
         created_at=value.created_at,
         completed_at=value.completed_at,
         exercises=tuple(workout_exercise_response(item) for item in value.exercises),
+    )
+
+
+def workout_event_response(value: WorkoutEventResult) -> WorkoutEventResponse:
+    return WorkoutEventResponse(
+        kind=value.kind,
+        replayed=value.replayed,
+        workout=workout_response(value.workout) if value.workout is not None else None,
+        added_exercises=tuple(
+            workout_exercise_response(item) for item in value.added_exercises
+        ),
+        clarification_message=value.clarification_message,
     )

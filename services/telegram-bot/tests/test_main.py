@@ -1,16 +1,30 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from datetime import date
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
 from telegram.constants import ChatType
 
-from app.backend import BackendError, RegistrationResult
-from app.main import BACKEND_CLIENT_KEY, REGISTRATION_ERROR_MESSAGE, start
+from app.backend import (
+    BackendError,
+    ExerciseSummary,
+    RegistrationResult,
+    SetSummary,
+    WorkoutEventResult,
+)
+from app.main import (
+    BACKEND_CLIENT_KEY,
+    REGISTRATION_ERROR_MESSAGE,
+    log_workout,
+    open_workout,
+    start,
+)
 
 
 def _objects(*, chat_type=ChatType.PRIVATE, user=True):
-    message = SimpleNamespace(reply_text=AsyncMock())
+    message = SimpleNamespace(reply_text=AsyncMock(), text="panca 80x8")
     effective_user = (
         SimpleNamespace(
             id=12345,
@@ -26,9 +40,13 @@ def _objects(*, chat_type=ChatType.PRIVATE, user=True):
         effective_user=effective_user,
         update_id=987,
     )
-    backend = SimpleNamespace(register_telegram_user=AsyncMock())
+    backend = SimpleNamespace(
+        register_telegram_user=AsyncMock(),
+        process_workout_event=AsyncMock(),
+    )
     context = SimpleNamespace(
-        application=SimpleNamespace(bot_data={BACKEND_CLIENT_KEY: backend})
+        application=SimpleNamespace(bot_data={BACKEND_CLIENT_KEY: backend}),
+        args=[],
     )
     return update, context, message, backend
 
@@ -87,3 +105,71 @@ async def test_backend_failure_returns_safe_error() -> None:
     await start(update, context)
 
     message.reply_text.assert_awaited_once_with(REGISTRATION_ERROR_MESSAGE)
+
+
+@pytest.mark.asyncio
+async def test_workout_command_passes_natural_date_and_formats_response() -> None:
+    update, context, message, backend = _objects()
+    context.args = ["ieri"]
+    backend.process_workout_event.return_value = WorkoutEventResult(
+        kind="opened",
+        replayed=False,
+        performed_on=date(2026, 8, 4),
+        exercises=(),
+        total_exercises=0,
+        total_sets=0,
+        clarification_message=None,
+    )
+
+    await open_workout(update, context)
+
+    backend.process_workout_event.assert_awaited_once_with(
+        telegram_user_id=12345,
+        update_id=987,
+        action="open",
+        text="ieri",
+    )
+    message.reply_text.assert_awaited_once_with("Workout aperto per il 04/08/2026 ✅")
+
+
+@pytest.mark.asyncio
+async def test_text_message_formats_persisted_exercises() -> None:
+    update, context, message, backend = _objects()
+    backend.process_workout_event.return_value = WorkoutEventResult(
+        kind="logged",
+        replayed=False,
+        performed_on=date(2026, 8, 5),
+        exercises=(
+            ExerciseSummary(
+                name="Bench Press",
+                sets=(SetSummary(8, Decimal("80.000"), "kg"),),
+            ),
+        ),
+        total_exercises=1,
+        total_sets=1,
+        clarification_message=None,
+    )
+
+    await log_workout(update, context)
+
+    backend.process_workout_event.assert_awaited_once_with(
+        telegram_user_id=12345,
+        update_id=987,
+        action="log",
+        text="panca 80x8",
+    )
+    message.reply_text.assert_awaited_once_with("Ho registrato:\nBench Press\n80 kg × 8")
+
+
+@pytest.mark.asyncio
+async def test_missing_draft_has_actionable_message() -> None:
+    update, context, message, backend = _objects()
+    backend.process_workout_event.side_effect = BackendError(
+        "missing", code="noactiveworkout"
+    )
+
+    await log_workout(update, context)
+
+    message.reply_text.assert_awaited_once_with(
+        "Non hai un workout aperto. Usa /workout per iniziare."
+    )

@@ -9,11 +9,50 @@ from app.domain.exceptions import (
     ActiveWorkoutExistsError,
     ConflictError,
     DomainError,
+    ExternalIdentityNotRegisteredError,
     NotFoundError,
+    LlmInvalidResponseError,
+    LlmTimeoutError,
+    LlmUnavailableError,
 )
 
 
 def install_error_handlers(app: FastAPI) -> None:
+    @app.exception_handler(LlmInvalidResponseError)
+    async def llm_invalid_response(_: Request, error: LlmInvalidResponseError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"detail": {"code": "llm_invalid_response", "message": str(error)}},
+        )
+
+    @app.exception_handler(LlmTimeoutError)
+    async def llm_timeout(_: Request, error: LlmTimeoutError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            content={"detail": {"code": "llm_timeout", "message": str(error)}},
+        )
+
+    @app.exception_handler(LlmUnavailableError)
+    async def llm_unavailable(_: Request, error: LlmUnavailableError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": {"code": "llm_unavailable", "message": str(error)}},
+        )
+
+    @app.exception_handler(ExternalIdentityNotRegisteredError)
+    async def external_identity_not_registered(
+        _: Request, error: ExternalIdentityNotRegisteredError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "detail": {
+                    "code": "external_identity_not_registered",
+                    "message": str(error),
+                }
+            },
+        )
+
     @app.exception_handler(NotFoundError)
     async def not_found(_: Request, error: NotFoundError) -> JSONResponse:
         return JSONResponse(

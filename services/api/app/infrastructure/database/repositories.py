@@ -139,6 +139,14 @@ class SqlAlchemyExerciseRepository:
         )
         return to_exercise(model) if model is not None else None
 
+    async def list_for_user(self, user_id: UUID) -> tuple[Exercise, ...]:
+        models = await self._session.scalars(
+            select(orm.Exercise)
+            .where(orm.Exercise.user_id == user_id)
+            .order_by(orm.Exercise.name, orm.Exercise.id)
+        )
+        return tuple(to_exercise(model) for model in models)
+
     async def get_by_normalized_name(
         self, user_id: UUID, normalized_name: str
     ) -> Exercise | None:

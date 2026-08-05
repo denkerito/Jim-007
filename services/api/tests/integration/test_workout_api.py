@@ -1,5 +1,5 @@
 from functools import partial
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -85,6 +85,18 @@ async def test_http_lifecycle_and_authentication(
             f"/users/{user_id}/workouts/{uuid4()}/complete", headers=headers
         )
         assert missing.status_code == 404
+
+        headers["Idempotency-Key"] = "future"
+        future = await client.post(
+            f"/users/{user_id}/workouts",
+            headers=headers,
+            json={
+                "performed_on": str(
+                    datetime.now(ZoneInfo("Europe/Rome")).date() + timedelta(days=1)
+                )
+            },
+        )
+        assert future.status_code == 422
 
         headers["Idempotency-Key"] = "empty-draft"
         empty_draft = await client.post(

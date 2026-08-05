@@ -8,23 +8,40 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.api.errors import install_error_handlers
 from app.api.identities import router as identities_router
 from app.api.workouts import router as workouts_router
+from app.api.workout_events import router as workout_events_router
 from app.config import get_settings
 from app.infrastructure.database.session import engine
+from app.infrastructure.llm import GeminiWorkoutTextInterpreter
 
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-    del application
-    yield
-    await engine.dispose()
+    if settings.llm_provider != "gemini":
+        raise RuntimeError(f"Unsupported LLM provider: {settings.llm_provider}")
+    if settings.gemini_api_key is None:
+        raise RuntimeError("GEMINI_API_KEY is required by the API service")
+    interpreter = GeminiWorkoutTextInterpreter(
+        api_key=settings.gemini_api_key.get_secret_value(),
+        model=settings.llm_model,
+        timeout_seconds=settings.llm_timeout_seconds,
+        max_output_tokens=settings.llm_max_output_tokens,
+        thinking_level=settings.llm_thinking_level,
+    )
+    application.state.workout_text_interpreter = interpreter
+    try:
+        yield
+    finally:
+        await interpreter.close()
+        await engine.dispose()
 
 
 app = FastAPI(title="JIM007 API", version="0.1.0", lifespan=lifespan)
 install_error_handlers(app)
 app.include_router(identities_router)
 app.include_router(workouts_router)
+app.include_router(workout_events_router)
 
 
 @app.get("/health/live", tags=["system"])

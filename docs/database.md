@@ -20,7 +20,7 @@ Il database contiene dati applicativi strutturati. Il bot Telegram e il provider
 - catalogo personale degli esercizi;
 - invio al LLM del catalogo personale, composto da qualche decina di esercizi;
 - creazione automatica di un esercizio sconosciuto;
-- creazione incrementale di un workout, con un esercizio e i relativi set per messaggio;
+- creazione incrementale di un workout, con uno o piu esercizi e i relativi set per messaggio;
 - ciclo di vita esplicito `draft -> completed` e un solo draft attivo per utente;
 - data del workout esplicita o relativa, con default alla data locale corrente;
 - esercizi ordinati all'interno del workout;

@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+from enum import StrEnum
 from typing import Annotated, Generic, Literal, TypeVar
 from uuid import UUID
 
@@ -51,6 +52,74 @@ class PerformedSetInput(CommandModel):
         return self
 
 
+class InterpretationStatus(StrEnum):
+    READY = "ready"
+    NEEDS_CLARIFICATION = "needs_clarification"
+
+
+class WorkoutEventAction(StrEnum):
+    OPEN = "open"
+    LOG = "log"
+    COMPLETE = "complete"
+
+
+class ExerciseCatalogItem(CommandModel):
+    id: UUID
+    name: str
+
+
+class WorkoutInterpretationContext(CommandModel):
+    locale: str
+    timezone: str
+    current_date: date
+    preferred_load_unit: LoadUnit
+
+
+class InterpretedExercise(CommandModel):
+    catalog_exercise_id: UUID | None = None
+    name: str = Field(min_length=1, max_length=255)
+    sets: tuple[PerformedSetInput, ...] = Field(min_length=1)
+    notes: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("exercise name must not be blank")
+        return value
+
+
+class WorkoutDateInterpretation(CommandModel):
+    status: InterpretationStatus
+    performed_on: date | None = None
+    notes: str | None = None
+    clarification_message: str | None = None
+
+    @model_validator(mode="after")
+    def status_must_match_payload(self) -> "WorkoutDateInterpretation":
+        if self.status is InterpretationStatus.READY:
+            if self.performed_on is None or self.clarification_message is not None:
+                raise ValueError("a ready date interpretation requires only performed_on")
+        elif self.performed_on is not None or not (self.clarification_message or "").strip():
+            raise ValueError("a clarification requires a message and no performed_on")
+        return self
+
+
+class WorkoutLogInterpretation(CommandModel):
+    status: InterpretationStatus
+    exercises: tuple[InterpretedExercise, ...] = ()
+    clarification_message: str | None = None
+
+    @model_validator(mode="after")
+    def status_must_match_payload(self) -> "WorkoutLogInterpretation":
+        if self.status is InterpretationStatus.READY:
+            if not self.exercises or self.clarification_message is not None:
+                raise ValueError("a ready log interpretation requires exercises only")
+        elif self.exercises or not (self.clarification_message or "").strip():
+            raise ValueError("a clarification requires a message and no exercises")
+        return self
+
+
 class CreateWorkoutCommand(CommandModel):
     user_id: UUID
     idempotency_key: str = Field(min_length=1, max_length=255)
@@ -67,6 +136,14 @@ class AddExerciseToWorkoutCommand(CommandModel):
     exercise: ExerciseReference
     sets: tuple[PerformedSetInput, ...] = Field(min_length=1)
     notes: str | None = None
+
+
+class LogWorkoutMessageCommand(CommandModel):
+    user_id: UUID
+    workout_id: UUID
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    request_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    exercises: tuple[InterpretedExercise, ...] = Field(min_length=1)
 
 
 class CompleteWorkoutCommand(CommandModel):
@@ -90,6 +167,24 @@ class RegisterExternalIdentityCommand(CommandModel):
         return value
 
 
+class ProcessWorkoutEventCommand(CommandModel):
+    provider: str = Field(min_length=1, max_length=32)
+    provider_subject: str = Field(min_length=1, max_length=255)
+    action: WorkoutEventAction
+    text: str | None = Field(default=None, max_length=4096)
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    request_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def action_must_match_text(self) -> "ProcessWorkoutEventCommand":
+        text = (self.text or "").strip()
+        if self.action is WorkoutEventAction.LOG and not text:
+            raise ValueError("log events require text")
+        if self.action is WorkoutEventAction.COMPLETE and self.text is not None:
+            raise ValueError("complete events do not accept text")
+        return self
+
+
 @dataclass(frozen=True, slots=True)
 class RegistrationResult:
     user: User
@@ -104,3 +199,19 @@ ResultT = TypeVar("ResultT", Workout, WorkoutExercise)
 class CommandResult(Generic[ResultT]):
     value: ResultT
     replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LogWorkoutMessageResult:
+    workout: Workout
+    added_exercises: tuple[WorkoutExercise, ...]
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class WorkoutEventResult:
+    kind: Literal["opened", "logged", "completed", "needs_clarification"]
+    workout: Workout | None = None
+    added_exercises: tuple[WorkoutExercise, ...] = ()
+    clarification_message: str | None = None
+    replayed: bool = False

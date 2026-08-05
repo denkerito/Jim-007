@@ -18,9 +18,9 @@ from app.infrastructure.database.models import AppUser
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("LOG_LEVEL", "INFO")
 os.environ.setdefault("INTERNAL_API_TOKEN", "integration-secret")
-os.environ.setdefault("LLM_PROVIDER", "fake")
-os.environ.setdefault("LLM_MODEL", "fake")
-os.environ.setdefault("LLM_API_KEY", "fake")
+os.environ.setdefault("LLM_PROVIDER", "gemini")
+os.environ.setdefault("LLM_MODEL", "gemini-3.5-flash-lite")
+os.environ.setdefault("GEMINI_API_KEY", "fake")
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://unused:unused@127.0.0.1:1/unused")
 
 

@@ -12,6 +12,10 @@ from app.application.commands import (
     CompleteWorkoutCommand,
     CreateWorkoutCommand,
     ExistingExerciseReference,
+    LogWorkoutMessageCommand,
+    LogWorkoutMessageResult,
+    NewExerciseReference,
+    PerformedSetInput,
     RegisterExternalIdentityCommand,
     RegistrationResult,
 )
@@ -19,6 +23,7 @@ from app.application.ports import ProcessedCommand, UnitOfWork, UnitOfWorkFactor
 from app.domain.exceptions import (
     ActiveWorkoutExistsError,
     IdempotencyConflictError,
+    InvalidWorkoutDateError,
     InvalidWorkoutStateError,
     NotFoundError,
     WorkoutNotEditableError,
@@ -26,7 +31,6 @@ from app.domain.exceptions import (
 from app.domain.models import (
     Load,
     LoadUnit,
-    PerformedSet,
     Workout,
     WorkoutExercise,
     WorkoutStatus,
@@ -161,6 +165,8 @@ class CreateWorkout:
             performed_on = command.performed_on or datetime.now(
                 ZoneInfo(user.timezone)
             ).date()
+            if performed_on > datetime.now(ZoneInfo(user.timezone)).date():
+                raise InvalidWorkoutDateError("A workout cannot be dated in the future")
             workout = await uow.workouts.create(
                 workout_id=workout_id,
                 user_id=command.user_id,
@@ -208,50 +214,140 @@ class AddExerciseToWorkout:
             if workout.status is not WorkoutStatus.DRAFT:
                 raise WorkoutNotEditableError("A completed workout cannot be changed")
 
-            if isinstance(command.exercise, ExistingExerciseReference):
-                exercise = await uow.exercises.get_by_id(
-                    command.exercise.exercise_id, command.user_id
-                )
-                if exercise is None:
-                    raise NotFoundError("Exercise not found")
-            else:
-                name = clean_required_text(command.exercise.name)
-                if not name:
-                    raise InvalidWorkoutStateError("Exercise name must not be blank")
-                exercise = await uow.exercises.get_or_create(
-                    exercise_id=uuid4(),
-                    user_id=command.user_id,
-                    name=name,
-                    normalized_name=normalize_exercise_name(name),
-                )
-
-            set_values = tuple(
-                (
-                    uuid4(),
-                    item.repetitions,
-                    (
-                        Load(
-                            value=item.load_value,
-                            unit=item.load_unit or user.preferred_load_unit,
-                        )
-                        if item.load_value is not None
-                        else None
-                    ),
-                    item.notes,
-                )
-                for item in command.sets
-            )
-            occurrence = await uow.workouts.append_exercise(
-                workout_id=workout.id,
+            occurrence = await _append_exercise(
+                uow=uow,
                 user_id=command.user_id,
+                workout_id=workout.id,
                 occurrence_id=occurrence_id,
-                exercise=exercise,
+                reference=command.exercise,
+                sets=command.sets,
                 notes=command.notes,
-                sets=set_values,
+                preferred_load_unit=user.preferred_load_unit,
             )
             workout.with_exercise(occurrence)
             await uow.commit()
             return CommandResult(occurrence, replayed=False)
+
+
+async def _append_exercise(
+    *,
+    uow: UnitOfWork,
+    user_id: UUID,
+    workout_id: UUID,
+    occurrence_id: UUID,
+    reference: ExistingExerciseReference | NewExerciseReference,
+    sets: tuple[PerformedSetInput, ...],
+    notes: str | None,
+    preferred_load_unit: LoadUnit,
+) -> WorkoutExercise:
+    if isinstance(reference, ExistingExerciseReference):
+        exercise = await uow.exercises.get_by_id(reference.exercise_id, user_id)
+        if exercise is None:
+            raise NotFoundError("Exercise not found")
+    else:
+        name = clean_required_text(reference.name)
+        if not name:
+            raise InvalidWorkoutStateError("Exercise name must not be blank")
+        exercise = await uow.exercises.get_or_create(
+            exercise_id=uuid4(),
+            user_id=user_id,
+            name=name,
+            normalized_name=normalize_exercise_name(name),
+        )
+
+    set_values = tuple(
+        (
+            uuid4(),
+            item.repetitions,
+            (
+                Load(
+                    value=item.load_value,
+                    unit=item.load_unit or preferred_load_unit,
+                )
+                if item.load_value is not None
+                else None
+            ),
+            _clean_optional_text(item.notes),
+        )
+        for item in sets
+    )
+    return await uow.workouts.append_exercise(
+        workout_id=workout_id,
+        user_id=user_id,
+        occurrence_id=occurrence_id,
+        exercise=exercise,
+        notes=_clean_optional_text(notes),
+        sets=set_values,
+    )
+
+
+class LogWorkoutMessage:
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    async def execute(
+        self, command: LogWorkoutMessageCommand
+    ) -> LogWorkoutMessageResult:
+        processed = ProcessedCommand(
+            idempotency_key=command.idempotency_key,
+            user_id=command.user_id,
+            operation="log_workout_message",
+            request_hash=command.request_hash,
+            resource_id=command.workout_id,
+        )
+        async with self._uow_factory() as uow:
+            replay = await _claim_or_replay(
+                uow,
+                processed,
+                lambda resource_id: uow.workouts.get_by_id(resource_id, command.user_id),
+            )
+            if replay is not None:
+                return LogWorkoutMessageResult(
+                    workout=replay.value,
+                    added_exercises=(),
+                    replayed=True,
+                )
+
+            user = await uow.users.get_by_id(command.user_id)
+            if user is None:
+                raise NotFoundError("User not found")
+            workout = await uow.workouts.get_for_update(
+                command.workout_id, command.user_id
+            )
+            if workout is None:
+                raise NotFoundError("Workout not found")
+            if workout.status is not WorkoutStatus.DRAFT:
+                raise WorkoutNotEditableError("A completed workout cannot be changed")
+
+            added: list[WorkoutExercise] = []
+            for interpreted in command.exercises:
+                reference: ExistingExerciseReference | NewExerciseReference
+                if interpreted.catalog_exercise_id is not None:
+                    reference = ExistingExerciseReference(
+                        kind="existing",
+                        exercise_id=interpreted.catalog_exercise_id,
+                    )
+                else:
+                    reference = NewExerciseReference(kind="new", name=interpreted.name)
+                occurrence = await _append_exercise(
+                    uow=uow,
+                    user_id=command.user_id,
+                    workout_id=workout.id,
+                    occurrence_id=uuid4(),
+                    reference=reference,
+                    sets=interpreted.sets,
+                    notes=interpreted.notes,
+                    preferred_load_unit=user.preferred_load_unit,
+                )
+                workout = workout.with_exercise(occurrence)
+                added.append(occurrence)
+
+            await uow.commit()
+            return LogWorkoutMessageResult(
+                workout=workout,
+                added_exercises=tuple(added),
+                replayed=False,
+            )
 
 
 class CompleteWorkout:

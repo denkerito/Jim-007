@@ -10,10 +10,17 @@ from app.application.commands import (
     AddExerciseToWorkoutCommand,
     CompleteWorkoutCommand,
     CreateWorkoutCommand,
+    InterpretedExercise,
+    LogWorkoutMessageCommand,
     NewExerciseReference,
     PerformedSetInput,
 )
-from app.application.services import AddExerciseToWorkout, CompleteWorkout, CreateWorkout
+from app.application.services import (
+    AddExerciseToWorkout,
+    CompleteWorkout,
+    CreateWorkout,
+    LogWorkoutMessage,
+)
 from app.domain.exceptions import (
     ActiveWorkoutExistsError,
     IdempotencyConflictError,
@@ -230,3 +237,42 @@ async def test_add_and_complete_are_serialized_without_partial_blocks(
         assert persisted.status is WorkoutStatus.COMPLETED
         assert len(persisted.exercises) in (1, 2)
         assert all(len(item.sets) in (1, 2) for item in persisted.exercises)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_batch_replay_writes_each_exercise_once(
+    session_factory, user_id
+) -> None:
+    uow = factory(session_factory)
+    workout = await CreateWorkout(uow).execute(
+        CreateWorkoutCommand(
+            user_id=user_id, idempotency_key="create-batch", request_hash=HASH_A
+        )
+    )
+    command = LogWorkoutMessageCommand(
+        user_id=user_id,
+        workout_id=workout.value.id,
+        idempotency_key="same-message",
+        request_hash=HASH_B,
+        exercises=(
+            InterpretedExercise(
+                name="Bench Press",
+                sets=(PerformedSetInput(repetitions=8, load_value="80"),),
+            ),
+            InterpretedExercise(
+                name="Lat Machine",
+                sets=(PerformedSetInput(repetitions=10, load_value="70"),),
+            ),
+        ),
+    )
+
+    first, second = await asyncio.gather(
+        LogWorkoutMessage(uow).execute(command),
+        LogWorkoutMessage(uow).execute(command),
+    )
+
+    assert sorted((first.replayed, second.replayed)) == [False, True]
+    async with uow() as check:
+        persisted = await check.workouts.get_by_id(workout.value.id, user_id)
+        assert persisted is not None
+        assert len(persisted.exercises) == 2

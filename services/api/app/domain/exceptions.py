@@ -9,6 +9,10 @@ class NotFoundError(DomainError):
     """A requested entity does not exist or is not owned by the caller."""
 
 
+class ExternalIdentityNotRegisteredError(NotFoundError):
+    """A chat provider identity has not completed registration."""
+
+
 class ConflictError(DomainError):
     """The requested operation conflicts with current state."""
 
@@ -31,3 +35,27 @@ class IdempotencyConflictError(ConflictError):
 
 class InvalidWorkoutStateError(ConflictError):
     """A workout cannot perform the requested state transition."""
+
+
+class NoActiveWorkoutError(ConflictError):
+    """The user has no draft workout to update or complete."""
+
+
+class InvalidWorkoutDateError(DomainError):
+    """The requested workout date violates tracking rules."""
+
+
+class LlmError(Exception):
+    """Base error for failures at the text interpretation boundary."""
+
+
+class LlmUnavailableError(LlmError):
+    """The configured LLM provider is temporarily unavailable."""
+
+
+class LlmTimeoutError(LlmError):
+    """The configured LLM provider exceeded its deadline."""
+
+
+class LlmInvalidResponseError(LlmError):
+    """The configured LLM provider returned unusable structured output."""
