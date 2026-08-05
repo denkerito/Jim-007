@@ -17,10 +17,27 @@ from app.backend import (
 from app.main import (
     BACKEND_CLIENT_KEY,
     REGISTRATION_ERROR_MESSAGE,
+    _format_decimal,
     log_workout,
     open_workout,
     start,
 )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (Decimal("80"), "80"),
+        (Decimal("70"), "70"),
+        (Decimal("80.000"), "80"),
+        (Decimal("8.500"), "8.5"),
+        (Decimal("0.000"), "0"),
+    ],
+)
+def test_format_decimal_only_trims_fractional_zeroes(
+    value: Decimal, expected: str
+) -> None:
+    assert _format_decimal(value) == expected
 
 
 def _objects(*, chat_type=ChatType.PRIVATE, user=True):

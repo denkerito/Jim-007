@@ -147,7 +147,10 @@ async def log_workout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 def _format_decimal(value) -> str:
-    return format(value, "f").rstrip("0").rstrip(".") or "0"
+    rendered = format(value, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered or "0"
 
 
 def _format_exercise(value: ExerciseSummary) -> str:
