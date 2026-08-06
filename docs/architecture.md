@@ -35,6 +35,13 @@ l'identita esterna tramite `POST /internal/identities/telegram`. FastAPI usa la
 coppia stabile `(provider, provider_subject)` per collegarla a un utente applicativo
 e aggiorna soltanto i metadati descrittivi Telegram nelle registrazioni successive.
 
+Le letture Telegram usano `POST /internal/history-queries`, che risolve la stessa
+identita provider-neutral e delega ai casi d'uso read-only. `/history` non usa il
+provider LLM; `/exercise` evita la chiamata esterna per un nome normalizzato esatto
+e usa Gemini soltanto per scegliere un ID gia presente nel catalogo personale. La
+chiamata LLM avviene senza transazioni aperte e il risultato viene validato contro
+il catalogo prima della query finale.
+
 ## Layer dell'API
 
 Il backend separa esplicitamente quattro responsabilita:
@@ -47,6 +54,17 @@ Il backend separa esplicitamente quattro responsabilita:
 I modelli ORM non attraversano il confine dell'infrastruttura. Ogni caso d'uso apre una Unit of Work, condivide una sola `AsyncSession` tra i repository ed esegue un unico commit. I repository possono usare `flush`, ma non eseguono commit autonomamente.
 
 La registrazione di un allenamento e incrementale: viene creato un workout `draft`, ogni messaggio aggiunge atomicamente un `WorkoutExercise` con tutti i suoi set e un comando esplicito porta infine il workout a `completed`. Non vengono mantenute transazioni database aperte tra messaggi o durante chiamate a servizi esterni.
+
+Workout history ed exercise history sono proiezioni delle tabelle normalizzate e
+includono solo workout `completed`. Usano paginazione keyset con un cursore opaco
+basato su `(performed_on, created_at, id)` in ordine decrescente. L'exercise history
+pagina per workout e raggruppa tutte le occorrenze dello stesso esercizio presenti
+nello stesso allenamento.
+
+Le API canoniche sono `GET /users/{user_id}/workouts` e
+`GET /users/{user_id}/exercises/{exercise_id}/history`; entrambe accettano `limit`
+(default 5, massimo 20) e un `cursor` opzionale e restituiscono `next_cursor` quando
+esiste una pagina successiva.
 
 ## Persistenza e migrazioni
 

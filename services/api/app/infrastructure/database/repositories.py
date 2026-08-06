@@ -3,11 +3,12 @@
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.application.commands import ExerciseHistoryItem, HistoryCursor
 from app.application.ports import ProcessedCommand as CommandRecord
 from app.domain.exceptions import ActiveWorkoutExistsError
 from app.domain.models import (
@@ -33,6 +34,29 @@ def _workout_options() -> tuple[object, ...]:
     return (
         selectinload(orm.Workout.exercises).selectinload(orm.WorkoutExercise.exercise),
         selectinload(orm.Workout.exercises).selectinload(orm.WorkoutExercise.sets),
+    )
+
+
+def _exercise_history_options(exercise_id: UUID) -> tuple[object, ...]:
+    matching_occurrences = orm.Workout.exercises.and_(
+        orm.WorkoutExercise.exercise_id == exercise_id
+    )
+    return (
+        selectinload(matching_occurrences).selectinload(orm.WorkoutExercise.exercise),
+        selectinload(matching_occurrences).selectinload(orm.WorkoutExercise.sets),
+    )
+
+
+def _after_history_cursor(statement, after: HistoryCursor | None):
+    if after is None:
+        return statement
+    return statement.where(
+        tuple_(
+            orm.Workout.performed_on,
+            orm.Workout.created_at,
+            orm.Workout.id,
+        )
+        < tuple_(after.performed_on, after.created_at, after.workout_id)
     )
 
 
@@ -316,6 +340,69 @@ class SqlAlchemyWorkoutRepository:
         if model is None:
             raise RuntimeError("Completed workout could not be loaded")
         return to_workout(model)
+
+    async def list_completed(
+        self,
+        user_id: UUID,
+        *,
+        limit: int,
+        after: HistoryCursor | None,
+    ) -> tuple[Workout, ...]:
+        statement = (
+            select(orm.Workout)
+            .where(
+                orm.Workout.user_id == user_id,
+                orm.Workout.status == "completed",
+            )
+            .options(*_workout_options())
+            .order_by(
+                orm.Workout.performed_on.desc(),
+                orm.Workout.created_at.desc(),
+                orm.Workout.id.desc(),
+            )
+            .limit(limit)
+        )
+        models = await self._session.scalars(_after_history_cursor(statement, after))
+        return tuple(to_workout(model) for model in models)
+
+    async def list_completed_for_exercise(
+        self,
+        user_id: UUID,
+        exercise_id: UUID,
+        *,
+        limit: int,
+        after: HistoryCursor | None,
+    ) -> tuple[ExerciseHistoryItem, ...]:
+        statement = (
+            select(orm.Workout)
+            .where(
+                orm.Workout.user_id == user_id,
+                orm.Workout.status == "completed",
+                orm.Workout.exercises.any(
+                    orm.WorkoutExercise.exercise_id == exercise_id
+                ),
+            )
+            .options(*_exercise_history_options(exercise_id))
+            .order_by(
+                orm.Workout.performed_on.desc(),
+                orm.Workout.created_at.desc(),
+                orm.Workout.id.desc(),
+            )
+            .limit(limit)
+        )
+        models = await self._session.scalars(_after_history_cursor(statement, after))
+        return tuple(
+            ExerciseHistoryItem(
+                workout_id=model.id,
+                performed_on=model.performed_on,
+                workout_notes=model.notes,
+                workout_created_at=model.created_at,
+                occurrences=tuple(
+                    to_workout_exercise(occurrence) for occurrence in model.exercises
+                ),
+            )
+            for model in models
+        )
 
 
 class SqlAlchemyProcessedCommandRepository:

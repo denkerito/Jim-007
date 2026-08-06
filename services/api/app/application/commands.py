@@ -1,7 +1,7 @@
 """Validated, transport-independent commands accepted by application services."""
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Generic, Literal, TypeVar
@@ -9,7 +9,14 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.domain.models import ExternalIdentity, LoadUnit, User, Workout, WorkoutExercise
+from app.domain.models import (
+    Exercise,
+    ExternalIdentity,
+    LoadUnit,
+    User,
+    Workout,
+    WorkoutExercise,
+)
 
 
 class CommandModel(BaseModel):
@@ -57,15 +64,46 @@ class InterpretationStatus(StrEnum):
     NEEDS_CLARIFICATION = "needs_clarification"
 
 
+class ExerciseResolutionStatus(StrEnum):
+    MATCHED = "matched"
+    NOT_FOUND = "not_found"
+    NEEDS_CLARIFICATION = "needs_clarification"
+
+
 class WorkoutEventAction(StrEnum):
     OPEN = "open"
     LOG = "log"
     COMPLETE = "complete"
 
 
+class HistoryQueryKind(StrEnum):
+    WORKOUTS = "workouts"
+    EXERCISE = "exercise"
+
+
 class ExerciseCatalogItem(CommandModel):
     id: UUID
     name: str
+
+
+class ExerciseQueryInterpretation(CommandModel):
+    status: ExerciseResolutionStatus
+    exercise_id: UUID | None = None
+    clarification_message: str | None = None
+
+    @model_validator(mode="after")
+    def status_must_match_payload(self) -> "ExerciseQueryInterpretation":
+        if self.status is ExerciseResolutionStatus.MATCHED:
+            if self.exercise_id is None or self.clarification_message is not None:
+                raise ValueError("a matched exercise query requires only exercise_id")
+        elif self.status is ExerciseResolutionStatus.NOT_FOUND:
+            if self.exercise_id is not None or self.clarification_message is not None:
+                raise ValueError("a not-found exercise query must not include a payload")
+        elif self.exercise_id is not None or not (
+            self.clarification_message or ""
+        ).strip():
+            raise ValueError("a clarification requires a message and no exercise_id")
+        return self
 
 
 class WorkoutInterpretationContext(CommandModel):
@@ -185,6 +223,45 @@ class ProcessWorkoutEventCommand(CommandModel):
         return self
 
 
+class ProcessHistoryQueryCommand(CommandModel):
+    provider: str = Field(min_length=1, max_length=32)
+    provider_subject: str = Field(min_length=1, max_length=255)
+    kind: HistoryQueryKind
+    query: str | None = Field(default=None, max_length=255)
+    limit: int = Field(default=5, ge=1, le=20)
+    cursor: str | None = Field(default=None, min_length=1, max_length=1024)
+
+    @field_validator("provider", "provider_subject")
+    @classmethod
+    def identity_text_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def kind_must_match_query(self) -> "ProcessHistoryQueryCommand":
+        query = (self.query or "").strip()
+        if self.kind is HistoryQueryKind.EXERCISE and not query:
+            raise ValueError("exercise history queries require query")
+        if self.kind is HistoryQueryKind.WORKOUTS and self.query is not None:
+            raise ValueError("workout history queries do not accept query")
+        return self
+
+
+class HistoryCursor(CommandModel):
+    version: Literal[1] = 1
+    performed_on: date
+    created_at: datetime
+    workout_id: UUID
+
+    @field_validator("created_at")
+    @classmethod
+    def created_at_must_be_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must include a timezone")
+        return value
+
+
 @dataclass(frozen=True, slots=True)
 class RegistrationResult:
     user: User
@@ -215,3 +292,38 @@ class WorkoutEventResult:
     added_exercises: tuple[WorkoutExercise, ...] = ()
     clarification_message: str | None = None
     replayed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class WorkoutHistoryPage:
+    items: tuple[Workout, ...]
+    next_cursor: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExerciseHistoryItem:
+    workout_id: UUID
+    performed_on: date
+    workout_notes: str | None
+    workout_created_at: datetime
+    occurrences: tuple[WorkoutExercise, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ExerciseHistoryPage:
+    exercise: Exercise
+    items: tuple[ExerciseHistoryItem, ...]
+    next_cursor: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryQueryResult:
+    kind: Literal[
+        "workouts",
+        "exercise",
+        "exercise_not_found",
+        "needs_clarification",
+    ]
+    workout_history: WorkoutHistoryPage | None = None
+    exercise_history: ExerciseHistoryPage | None = None
+    clarification_message: str | None = None

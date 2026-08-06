@@ -5,8 +5,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.application.commands import (
-    InterpretedExercise,
+    ExerciseCatalogItem,
+    ExerciseQueryInterpretation,
+    ExerciseResolutionStatus,
     InterpretationStatus,
+    InterpretedExercise,
     PerformedSetInput,
     WorkoutInterpretationContext,
     WorkoutLogInterpretation,
@@ -97,3 +100,35 @@ async def test_gemini_maps_empty_and_timed_out_responses(monkeypatch) -> None:
     adapter._timeout_seconds = 0.001
     with pytest.raises(LlmTimeoutError):
         await adapter.interpret_exercises(text="panca", context=_context(), catalog=())
+
+
+@pytest.mark.asyncio
+async def test_gemini_resolves_history_query_only_against_catalog(monkeypatch) -> None:
+    from uuid import uuid4
+
+    exercise_id = uuid4()
+    expected = ExerciseQueryInterpretation(
+        status=ExerciseResolutionStatus.MATCHED,
+        exercise_id=exercise_id,
+    )
+    client, create = _fake_client(expected.model_dump_json())
+    monkeypatch.setattr("app.infrastructure.llm.gemini.genai.Client", lambda **_: client)
+    adapter = GeminiWorkoutTextInterpreter(
+        api_key="secret",
+        model="gemini-3.5-flash-lite",
+        timeout_seconds=8,
+        max_output_tokens=4096,
+        thinking_level="minimal",
+    )
+
+    result = await adapter.resolve_exercise(
+        text="panca",
+        locale="it-IT",
+        catalog=(ExerciseCatalogItem(id=exercise_id, name="Panca piana"),),
+    )
+
+    assert result == expected
+    prompt = create.await_args.kwargs["input"]
+    assert "panca" in prompt
+    assert str(exercise_id) in prompt
+    assert "Non inventare ID" in prompt

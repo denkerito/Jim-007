@@ -93,6 +93,12 @@ ogni messaggio testuale aggiunge uno o piu esercizi e `/fine` completa il workou
 Un'interpretazione ambigua non produce scritture e genera una richiesta di
 chiarimento. Non e prevista conferma prima del salvataggio.
 
+Gli storici sono disponibili con `/history [limite]` e
+`/exercise <nome libero> [limite]`, con default 5 e massimo 20 risultati. Il primo
+comando mostra soltanto workout completati. Il secondo risolve prima un nome esatto
+nel catalogo personale e usa l'LLM solo per abbreviazioni o nomi colloquiali; una
+risoluzione ambigua richiede chiarimento e non crea nuovi esercizi.
+
 **Bot**
 - python-telegram-bot
 

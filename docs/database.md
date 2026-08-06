@@ -380,7 +380,7 @@ Vincoli:
 Indice per la history:
 
 ```text
-(user_id, performed_on DESC, created_at DESC)
+(user_id, status, performed_on DESC, created_at DESC, id DESC)
 ```
 
 ### 5.6 `workout_exercise`
@@ -407,7 +407,7 @@ Vincoli:
 Indici:
 
 ```text
-(user_id, exercise_id)
+(user_id, exercise_id, workout_id)
 (workout_id, position)
 ```
 

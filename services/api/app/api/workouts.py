@@ -5,16 +5,18 @@ import json
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 
 from app.api.auth import require_internal_token
-from app.api.dependencies import UowFactory, get_uow_factory
+from app.api.dependencies import UowFactory
 from app.api.schemas import (
     AddExerciseRequest,
     CreateWorkoutRequest,
     WorkoutExerciseResponse,
+    WorkoutHistoryPageResponse,
     WorkoutResponse,
     workout_exercise_response,
+    workout_history_page_response,
     workout_response,
 )
 from app.application.commands import (
@@ -22,7 +24,13 @@ from app.application.commands import (
     CompleteWorkoutCommand,
     CreateWorkoutCommand,
 )
-from app.application.services import AddExerciseToWorkout, CompleteWorkout, CreateWorkout
+from app.application.history import ListWorkoutHistory
+from app.application.services import (
+    AddExerciseToWorkout,
+    CompleteWorkout,
+    CreateWorkout,
+)
+
 router = APIRouter(
     prefix="/users/{user_id}/workouts",
     tags=["workouts"],
@@ -57,6 +65,23 @@ def _idempotency_key(
 
 
 IdempotencyKey = Annotated[str, Depends(_idempotency_key)]
+
+
+@router.get("", response_model=WorkoutHistoryPageResponse)
+async def list_workout_history(
+    user_id: UUID,
+    uow_factory: UowFactory,
+    limit: Annotated[int, Query(ge=1, le=20)] = 5,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=1024)] = None,
+) -> WorkoutHistoryPageResponse:
+    page = await ListWorkoutHistory(uow_factory).execute(
+        user_id=user_id,
+        limit=limit,
+        cursor=cursor,
+    )
+    return workout_history_page_response(page)
+
+
 @router.post("", response_model=WorkoutResponse, status_code=status.HTTP_201_CREATED)
 async def create_workout(
     user_id: UUID,

@@ -10,14 +10,29 @@ from app.domain.exceptions import (
     ConflictError,
     DomainError,
     ExternalIdentityNotRegisteredError,
-    NotFoundError,
+    InvalidHistoryCursorError,
     LlmInvalidResponseError,
     LlmTimeoutError,
     LlmUnavailableError,
+    NotFoundError,
 )
 
 
 def install_error_handlers(app: FastAPI) -> None:
+    @app.exception_handler(InvalidHistoryCursorError)
+    async def invalid_history_cursor(
+        _: Request, error: InvalidHistoryCursorError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "detail": {
+                    "code": "invalid_history_cursor",
+                    "message": str(error),
+                }
+            },
+        )
+
     @app.exception_handler(LlmInvalidResponseError)
     async def llm_invalid_response(_: Request, error: LlmInvalidResponseError) -> JSONResponse:
         return JSONResponse(

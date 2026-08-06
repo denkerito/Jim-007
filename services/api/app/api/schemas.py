@@ -7,8 +7,15 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.application.commands import (
+    ExerciseHistoryPage,
+    HistoryQueryKind,
+    HistoryQueryResult,
+    WorkoutEventAction,
+    WorkoutEventResult,
+    WorkoutHistoryPage,
+)
 from app.domain import models as domain
-from app.application.commands import WorkoutEventAction, WorkoutEventResult
 
 
 class ApiModel(BaseModel):
@@ -138,6 +145,80 @@ class WorkoutEventResponse(ApiModel):
     clarification_message: str | None = None
 
 
+class WorkoutHistoryPageResponse(ApiModel):
+    items: tuple[WorkoutResponse, ...]
+    next_cursor: str | None = None
+
+
+class ExerciseHistoryItemResponse(ApiModel):
+    workout_id: UUID
+    performed_on: date
+    workout_notes: str | None
+    occurrences: tuple[WorkoutExerciseResponse, ...]
+
+
+class ExerciseHistoryPageResponse(ApiModel):
+    exercise: ExerciseResponse
+    items: tuple[ExerciseHistoryItemResponse, ...]
+    next_cursor: str | None = None
+
+
+class HistoryQueryRequest(ApiModel):
+    provider: str = Field(min_length=1, max_length=32)
+    provider_subject: str = Field(min_length=1, max_length=255)
+    kind: HistoryQueryKind
+    query: str | None = Field(default=None, max_length=255)
+    limit: int = Field(default=5, ge=1, le=20)
+    cursor: str | None = Field(default=None, min_length=1, max_length=1024)
+
+    @field_validator("provider", "provider_subject")
+    @classmethod
+    def identity_text_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def kind_must_match_query(self) -> "HistoryQueryRequest":
+        query = (self.query or "").strip()
+        if self.kind is HistoryQueryKind.EXERCISE and not query:
+            raise ValueError("exercise history queries require query")
+        if self.kind is HistoryQueryKind.WORKOUTS and self.query is not None:
+            raise ValueError("workout history queries do not accept query")
+        return self
+
+
+class WorkoutHistoryQueryResponse(ApiModel):
+    kind: Literal["workouts"]
+    items: tuple[WorkoutResponse, ...]
+    next_cursor: str | None = None
+
+
+class ExerciseHistoryQueryResponse(ApiModel):
+    kind: Literal["exercise"]
+    exercise: ExerciseResponse
+    items: tuple[ExerciseHistoryItemResponse, ...]
+    next_cursor: str | None = None
+
+
+class ExerciseNotFoundQueryResponse(ApiModel):
+    kind: Literal["exercise_not_found"]
+
+
+class HistoryClarificationQueryResponse(ApiModel):
+    kind: Literal["needs_clarification"]
+    clarification_message: str
+
+
+HistoryQueryResponse = Annotated[
+    WorkoutHistoryQueryResponse
+    | ExerciseHistoryQueryResponse
+    | ExerciseNotFoundQueryResponse
+    | HistoryClarificationQueryResponse,
+    Field(discriminator="kind"),
+]
+
+
 def workout_exercise_response(value: domain.WorkoutExercise) -> WorkoutExerciseResponse:
     return WorkoutExerciseResponse(
         id=value.id,
@@ -190,5 +271,69 @@ def workout_event_response(value: WorkoutEventResult) -> WorkoutEventResponse:
         added_exercises=tuple(
             workout_exercise_response(item) for item in value.added_exercises
         ),
+        clarification_message=value.clarification_message,
+    )
+
+
+def workout_history_page_response(
+    value: WorkoutHistoryPage,
+) -> WorkoutHistoryPageResponse:
+    return WorkoutHistoryPageResponse(
+        items=tuple(workout_response(item) for item in value.items),
+        next_cursor=value.next_cursor,
+    )
+
+
+def exercise_history_page_response(
+    value: ExerciseHistoryPage,
+) -> ExerciseHistoryPageResponse:
+    return ExerciseHistoryPageResponse(
+        exercise=ExerciseResponse(
+            id=value.exercise.id,
+            name=value.exercise.name,
+            normalized_name=value.exercise.normalized_name,
+        ),
+        items=tuple(
+            ExerciseHistoryItemResponse(
+                workout_id=item.workout_id,
+                performed_on=item.performed_on,
+                workout_notes=item.workout_notes,
+                occurrences=tuple(
+                    workout_exercise_response(occurrence)
+                    for occurrence in item.occurrences
+                ),
+            )
+            for item in value.items
+        ),
+        next_cursor=value.next_cursor,
+    )
+
+
+def history_query_response(value: HistoryQueryResult) -> HistoryQueryResponse:
+    if value.kind == "workouts":
+        if value.workout_history is None:
+            raise RuntimeError("Workout history result is missing its page")
+        page = workout_history_page_response(value.workout_history)
+        return WorkoutHistoryQueryResponse(
+            kind="workouts",
+            items=page.items,
+            next_cursor=page.next_cursor,
+        )
+    if value.kind == "exercise":
+        if value.exercise_history is None:
+            raise RuntimeError("Exercise history result is missing its page")
+        page = exercise_history_page_response(value.exercise_history)
+        return ExerciseHistoryQueryResponse(
+            kind="exercise",
+            exercise=page.exercise,
+            items=page.items,
+            next_cursor=page.next_cursor,
+        )
+    if value.kind == "exercise_not_found":
+        return ExerciseNotFoundQueryResponse(kind="exercise_not_found")
+    if not value.clarification_message:
+        raise RuntimeError("Clarification result is missing its message")
+    return HistoryClarificationQueryResponse(
+        kind="needs_clarification",
         clarification_message=value.clarification_message,
     )

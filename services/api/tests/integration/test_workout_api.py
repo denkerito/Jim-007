@@ -1,5 +1,5 @@
-from functools import partial
 from datetime import datetime, timedelta
+from functools import partial
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -7,7 +7,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.api.workouts import get_uow_factory
+from app.api.dependencies import get_uow_factory
 from app.infrastructure.database.uow import SqlAlchemyUnitOfWork
 from app.main import app
 

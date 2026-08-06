@@ -4,12 +4,11 @@ import asyncio
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from typing import Literal
-from typing import Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 
 class BackendError(RuntimeError):
@@ -41,8 +40,10 @@ class _LoadResponse(BaseModel):
 
 
 class _PerformedSetResponse(BaseModel):
+    set_number: int = 1
     repetitions: int
     load: _LoadResponse | None = None
+    notes: str | None = None
 
 
 class _ExerciseResponse(BaseModel):
@@ -51,11 +52,13 @@ class _ExerciseResponse(BaseModel):
 
 class _WorkoutExerciseResponse(BaseModel):
     exercise: _ExerciseResponse
+    notes: str | None = None
     sets: tuple[_PerformedSetResponse, ...]
 
 
 class _WorkoutResponse(BaseModel):
     performed_on: date
+    notes: str | None = None
     exercises: tuple[_WorkoutExerciseResponse, ...]
 
 
@@ -67,17 +70,55 @@ class _WorkoutEventResponse(BaseModel):
     clarification_message: str | None = None
 
 
+class _ExerciseHistoryItemResponse(BaseModel):
+    performed_on: date
+    workout_notes: str | None = None
+    occurrences: tuple[_WorkoutExerciseResponse, ...]
+
+
+class _WorkoutHistoryQueryResponse(BaseModel):
+    kind: Literal["workouts"]
+    items: tuple[_WorkoutResponse, ...]
+
+
+class _ExerciseHistoryQueryResponse(BaseModel):
+    kind: Literal["exercise"]
+    exercise: _ExerciseResponse
+    items: tuple[_ExerciseHistoryItemResponse, ...]
+
+
+class _ExerciseNotFoundQueryResponse(BaseModel):
+    kind: Literal["exercise_not_found"]
+
+
+class _HistoryClarificationQueryResponse(BaseModel):
+    kind: Literal["needs_clarification"]
+    clarification_message: str
+
+
+_HistoryQueryResponse = Annotated[
+    _WorkoutHistoryQueryResponse
+    | _ExerciseHistoryQueryResponse
+    | _ExerciseNotFoundQueryResponse
+    | _HistoryClarificationQueryResponse,
+    Field(discriminator="kind"),
+]
+_history_query_adapter = TypeAdapter(_HistoryQueryResponse)
+
+
 @dataclass(frozen=True, slots=True)
 class SetSummary:
     repetitions: int
     load_value: Decimal | None
     load_unit: str | None
+    notes: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ExerciseSummary:
     name: str
     sets: tuple[SetSummary, ...]
+    notes: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +130,34 @@ class WorkoutEventResult:
     total_exercises: int
     total_sets: int
     clarification_message: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkoutHistoryItem:
+    performed_on: date
+    notes: str | None
+    exercises: tuple[ExerciseSummary, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ExerciseHistoryWorkout:
+    performed_on: date
+    workout_notes: str | None
+    occurrences: tuple[ExerciseSummary, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryQueryResult:
+    kind: Literal[
+        "workouts",
+        "exercise",
+        "exercise_not_found",
+        "needs_clarification",
+    ]
+    workouts: tuple[WorkoutHistoryItem, ...] = ()
+    exercise_name: str | None = None
+    exercise_workouts: tuple[ExerciseHistoryWorkout, ...] = ()
+    clarification_message: str | None = None
 
 
 class BackendClient:
@@ -178,6 +247,76 @@ class BackendClient:
             clarification_message=parsed.clarification_message,
         )
 
+    async def query_history(
+        self,
+        *,
+        telegram_user_id: int,
+        kind: Literal["workouts", "exercise"],
+        query: str | None,
+        limit: int,
+    ) -> HistoryQueryResult:
+        payload: dict[str, Any] = {
+            "provider": "telegram",
+            "provider_subject": str(telegram_user_id),
+            "kind": kind,
+            "query": query,
+            "limit": limit,
+        }
+        if query is None:
+            payload.pop("query")
+        try:
+            async with asyncio.timeout(12.0):
+                response = await self._client.post(
+                    "/internal/history-queries",
+                    json=payload,
+                )
+            if response.is_error:
+                detail = response.json().get("detail", {})
+                code = detail.get("code") if isinstance(detail, dict) else None
+                raise BackendError("Backend rejected history query", code=code)
+            parsed = _history_query_adapter.validate_python(response.json())
+        except BackendError:
+            raise
+        except (httpx.HTTPError, TimeoutError, ValidationError, ValueError) as error:
+            raise BackendError("Backend history query failed") from error
+
+        if isinstance(parsed, _WorkoutHistoryQueryResponse):
+            return HistoryQueryResult(
+                kind="workouts",
+                workouts=tuple(
+                    WorkoutHistoryItem(
+                        performed_on=item.performed_on,
+                        notes=item.notes,
+                        exercises=tuple(
+                            _exercise_summary(exercise) for exercise in item.exercises
+                        ),
+                    )
+                    for item in parsed.items
+                ),
+            )
+        if isinstance(parsed, _ExerciseHistoryQueryResponse):
+            return HistoryQueryResult(
+                kind="exercise",
+                exercise_name=parsed.exercise.name,
+                exercise_workouts=tuple(
+                    ExerciseHistoryWorkout(
+                        performed_on=item.performed_on,
+                        workout_notes=item.workout_notes,
+                        occurrences=tuple(
+                            _exercise_summary(occurrence)
+                            for occurrence in item.occurrences
+                        ),
+                    )
+                    for item in parsed.items
+                ),
+            )
+        if isinstance(parsed, _HistoryClarificationQueryResponse):
+            return HistoryQueryResult(
+                kind="needs_clarification",
+                clarification_message=parsed.clarification_message,
+            )
+        return HistoryQueryResult(kind="exercise_not_found")
+
     async def close(self) -> None:
         await self._client.aclose()
 
@@ -185,11 +324,13 @@ class BackendClient:
 def _exercise_summary(value: _WorkoutExerciseResponse) -> ExerciseSummary:
     return ExerciseSummary(
         name=value.exercise.name,
+        notes=value.notes,
         sets=tuple(
             SetSummary(
                 repetitions=item.repetitions,
                 load_value=item.load.value if item.load is not None else None,
                 load_unit=item.load.unit if item.load is not None else None,
+                notes=item.notes,
             )
             for item in value.sets
         ),

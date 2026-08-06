@@ -1,26 +1,31 @@
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from telegram.constants import ChatType
-
 from app.backend import (
     BackendError,
     ExerciseSummary,
+    HistoryQueryResult,
     RegistrationResult,
     SetSummary,
     WorkoutEventResult,
+    WorkoutHistoryItem,
 )
+from telegram.constants import ChatType
+
 from app.main import (
     BACKEND_CLIENT_KEY,
     REGISTRATION_ERROR_MESSAGE,
     _format_decimal,
+    _split_telegram_message,
+    exercise_history,
     log_workout,
     open_workout,
     start,
+    workout_history,
 )
 
 
@@ -60,6 +65,7 @@ def _objects(*, chat_type=ChatType.PRIVATE, user=True):
     backend = SimpleNamespace(
         register_telegram_user=AsyncMock(),
         process_workout_event=AsyncMock(),
+        query_history=AsyncMock(),
     )
     context = SimpleNamespace(
         application=SimpleNamespace(bot_data={BACKEND_CLIENT_KEY: backend}),
@@ -190,3 +196,105 @@ async def test_missing_draft_has_actionable_message() -> None:
     message.reply_text.assert_awaited_once_with(
         "Non hai un workout aperto. Usa /workout per iniziare."
     )
+
+
+@pytest.mark.asyncio
+async def test_history_command_passes_limit_and_formats_complete_workout() -> None:
+    update, context, message, backend = _objects()
+    context.args = ["2"]
+    backend.query_history.return_value = HistoryQueryResult(
+        kind="workouts",
+        workouts=(
+            WorkoutHistoryItem(
+                performed_on=date(2026, 8, 5),
+                notes="Push day",
+                exercises=(
+                    ExerciseSummary(
+                        name="Bench Press",
+                        notes="Pausa al petto",
+                        sets=(
+                            SetSummary(
+                                8,
+                                Decimal("80.000"),
+                                "kg",
+                                "RPE 8",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    await workout_history(update, context)
+
+    backend.query_history.assert_awaited_once_with(
+        telegram_user_id=12345,
+        kind="workouts",
+        query=None,
+        limit=2,
+    )
+    message.reply_text.assert_awaited_once_with(
+        "Storico workout\n\n"
+        "05/08/2026\n"
+        "Note workout: Push day\n"
+        "Bench Press\n"
+        "Note esercizio: Pausa al petto\n"
+        "1. 80 kg × 8 — RPE 8"
+    )
+
+
+@pytest.mark.asyncio
+async def test_exercise_command_parses_trailing_limit_and_empty_history() -> None:
+    update, context, message, backend = _objects()
+    context.args = ["panca", "piana", "7"]
+    backend.query_history.return_value = HistoryQueryResult(
+        kind="exercise",
+        exercise_name="Panca piana",
+        exercise_workouts=(),
+    )
+
+    await exercise_history(update, context)
+
+    backend.query_history.assert_awaited_once_with(
+        telegram_user_id=12345,
+        kind="exercise",
+        query="panca piana",
+        limit=7,
+    )
+    message.reply_text.assert_awaited_once_with(
+        "Nessun workout completato contiene Panca piana."
+    )
+
+
+@pytest.mark.asyncio
+async def test_exercise_command_returns_clarification() -> None:
+    update, context, message, backend = _objects()
+    context.args = ["panca"]
+    backend.query_history.return_value = HistoryQueryResult(
+        kind="needs_clarification",
+        clarification_message="Panca piana o inclinata?",
+    )
+
+    await exercise_history(update, context)
+
+    message.reply_text.assert_awaited_once_with("Panca piana o inclinata?")
+
+
+@pytest.mark.asyncio
+async def test_history_requires_valid_limit_without_calling_backend() -> None:
+    update, context, message, backend = _objects()
+    context.args = ["21"]
+
+    await workout_history(update, context)
+
+    backend.query_history.assert_not_awaited()
+    message.reply_text.assert_awaited_once_with("Uso: /history [limite da 1 a 20]")
+
+
+def test_long_history_messages_are_split_without_data_loss() -> None:
+    value = "Intestazione\n" + "nota " * 1200
+    chunks = _split_telegram_message(value, limit=100)
+
+    assert all(0 < len(chunk) <= 100 for chunk in chunks)
+    assert "".join(chunks) == value

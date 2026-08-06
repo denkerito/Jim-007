@@ -4,7 +4,6 @@ from uuid import uuid4
 
 import httpx
 import pytest
-
 from app.backend import BackendClient, BackendError
 
 
@@ -177,3 +176,86 @@ async def test_process_workout_event_preserves_backend_error_code() -> None:
         await client.close()
 
     assert captured.value.code == "noactiveworkout"
+
+
+@pytest.mark.asyncio
+async def test_query_exercise_history_sends_identity_and_parses_full_details() -> None:
+    exercise_id = uuid4()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/internal/history-queries"
+        assert request.headers["Authorization"] == "Bearer secret"
+        assert "Idempotency-Key" not in request.headers
+        assert json.loads(request.content) == {
+            "provider": "telegram",
+            "provider_subject": "12345",
+            "kind": "exercise",
+            "query": "panca",
+            "limit": 3,
+        }
+        return httpx.Response(
+            200,
+            json={
+                "kind": "exercise",
+                "exercise": {
+                    "id": str(exercise_id),
+                    "name": "Bench Press",
+                    "normalized_name": "bench press",
+                },
+                "items": [
+                    {
+                        "workout_id": str(uuid4()),
+                        "performed_on": "2026-08-05",
+                        "workout_notes": "Push day",
+                        "occurrences": [
+                            {
+                                "id": str(uuid4()),
+                                "exercise": {
+                                    "id": str(exercise_id),
+                                    "name": "Bench Press",
+                                    "normalized_name": "bench press",
+                                },
+                                "position": 1,
+                                "notes": "Pausa al petto",
+                                "sets": [
+                                    {
+                                        "id": str(uuid4()),
+                                        "set_number": 1,
+                                        "repetitions": 8,
+                                        "load": {
+                                            "value": "80.000",
+                                            "unit": "kg",
+                                            "kilograms": "80.000000",
+                                        },
+                                        "notes": "RPE 8",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+                "next_cursor": None,
+            },
+        )
+
+    client = BackendClient(
+        base_url="http://backend",
+        internal_api_token="secret",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        result = await client.query_history(
+            telegram_user_id=12345,
+            kind="exercise",
+            query="panca",
+            limit=3,
+        )
+    finally:
+        await client.close()
+
+    assert result.kind == "exercise"
+    assert result.exercise_name == "Bench Press"
+    occurrence = result.exercise_workouts[0].occurrences[0]
+    assert occurrence.notes == "Pausa al petto"
+    assert occurrence.sets[0].load_value == Decimal("80.000")
+    assert occurrence.sets[0].notes == "RPE 8"

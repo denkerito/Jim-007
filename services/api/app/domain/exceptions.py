@@ -45,6 +45,10 @@ class InvalidWorkoutDateError(DomainError):
     """The requested workout date violates tracking rules."""
 
 
+class InvalidHistoryCursorError(DomainError):
+    """A history cursor cannot be decoded or validated."""
+
+
 class LlmError(Exception):
     """Base error for failures at the text interpretation boundary."""
 

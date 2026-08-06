@@ -146,8 +146,10 @@ class Workout(Base):
 Index(
     "ix_workout_history",
     Workout.user_id,
+    Workout.status,
     Workout.performed_on.desc(),
     Workout.created_at.desc(),
+    Workout.id.desc(),
 )
 
 Index(
@@ -202,7 +204,12 @@ class WorkoutExercise(Base):
     )
 
 
-Index("ix_workout_exercise_user_id_exercise_id", WorkoutExercise.user_id, WorkoutExercise.exercise_id)
+Index(
+    "ix_workout_exercise_user_id_exercise_id",
+    WorkoutExercise.user_id,
+    WorkoutExercise.exercise_id,
+    WorkoutExercise.workout_id,
+)
 
 
 class PerformedSet(Base):

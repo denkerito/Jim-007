@@ -5,7 +5,11 @@ from typing import Annotated, cast
 
 from fastapi import Depends, Request
 
-from app.application.ports import UnitOfWorkFactory, WorkoutTextInterpreter
+from app.application.ports import (
+    ExerciseQueryInterpreter,
+    UnitOfWorkFactory,
+    WorkoutTextInterpreter,
+)
 from app.infrastructure.database.session import session_factory
 from app.infrastructure.database.uow import SqlAlchemyUnitOfWork
 
@@ -24,4 +28,14 @@ def get_workout_text_interpreter(request: Request) -> WorkoutTextInterpreter:
 WorkoutInterpreter = Annotated[
     WorkoutTextInterpreter,
     Depends(get_workout_text_interpreter),
+]
+
+
+def get_exercise_query_interpreter(request: Request) -> ExerciseQueryInterpreter:
+    return cast(ExerciseQueryInterpreter, request.app.state.exercise_query_interpreter)
+
+
+ExerciseHistoryInterpreter = Annotated[
+    ExerciseQueryInterpreter,
+    Depends(get_exercise_query_interpreter),
 ]

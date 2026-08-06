@@ -10,6 +10,9 @@ from uuid import UUID
 
 from app.application.commands import (
     ExerciseCatalogItem,
+    ExerciseHistoryItem,
+    ExerciseQueryInterpretation,
+    HistoryCursor,
     WorkoutDateInterpretation,
     WorkoutInterpretationContext,
     WorkoutLogInterpretation,
@@ -119,6 +122,23 @@ class WorkoutRepository(Protocol):
 
     async def complete(self, workout_id: UUID, user_id: UUID) -> Workout: ...
 
+    async def list_completed(
+        self,
+        user_id: UUID,
+        *,
+        limit: int,
+        after: HistoryCursor | None,
+    ) -> tuple[Workout, ...]: ...
+
+    async def list_completed_for_exercise(
+        self,
+        user_id: UUID,
+        exercise_id: UUID,
+        *,
+        limit: int,
+        after: HistoryCursor | None,
+    ) -> tuple[ExerciseHistoryItem, ...]: ...
+
 
 class ProcessedCommandRepository(Protocol):
     async def claim(self, command: ProcessedCommand) -> bool: ...
@@ -160,3 +180,13 @@ class WorkoutTextInterpreter(Protocol):
         context: WorkoutInterpretationContext,
         catalog: tuple[ExerciseCatalogItem, ...],
     ) -> WorkoutLogInterpretation: ...
+
+
+class ExerciseQueryInterpreter(Protocol):
+    async def resolve_exercise(
+        self,
+        *,
+        text: str,
+        locale: str,
+        catalog: tuple[ExerciseCatalogItem, ...],
+    ) -> ExerciseQueryInterpretation: ...
