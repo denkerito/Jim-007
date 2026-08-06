@@ -136,7 +136,7 @@ async def _send_workout_event(
         messages = {
             "external_identity_not_registered": "Registrati prima con /start.",
             "noactiveworkout": "Non hai un workout aperto. Usa /workout per iniziare.",
-            "active_workout_exists": "Hai gia un workout aperto. Usa /fine per completarlo.",
+            "active_workout_exists": "Hai gia un workout aperto. Usa /end per completarlo.",
             "invalidworkoutdate": "La data del workout non puo essere futura.",
         }
         await message.reply_text(messages.get(error.code, WORKOUT_ERROR_MESSAGE))
@@ -413,7 +413,7 @@ def main() -> None:
     application.bot_data[BACKEND_CLIENT_KEY] = backend
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("workout", open_workout))
-    application.add_handler(CommandHandler("fine", complete_workout))
+    application.add_handler(CommandHandler("end", complete_workout))
     application.add_handler(CommandHandler("history", workout_history))
     application.add_handler(CommandHandler("exercise", exercise_history))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, log_workout))

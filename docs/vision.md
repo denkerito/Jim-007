@@ -89,7 +89,7 @@ no l'ultima erano 6 reps
 - The application should not depend directly on a specific LLM provider
 
 Il flusso Telegram dell'MVP e esplicito: `/workout [data naturale]` apre il draft,
-ogni messaggio testuale aggiunge uno o piu esercizi e `/fine` completa il workout.
+ogni messaggio testuale aggiunge uno o piu esercizi e `/end` completa il workout.
 Un'interpretazione ambigua non produce scritture e genera una richiesta di
 chiarimento. Non e prevista conferma prima del salvataggio.
 

@@ -199,6 +199,20 @@ async def test_missing_draft_has_actionable_message() -> None:
 
 
 @pytest.mark.asyncio
+async def test_active_workout_points_to_end_command() -> None:
+    update, context, message, backend = _objects()
+    backend.process_workout_event.side_effect = BackendError(
+        "active", code="active_workout_exists"
+    )
+
+    await open_workout(update, context)
+
+    message.reply_text.assert_awaited_once_with(
+        "Hai gia un workout aperto. Usa /end per completarlo."
+    )
+
+
+@pytest.mark.asyncio
 async def test_history_command_passes_limit_and_formats_complete_workout() -> None:
     update, context, message, backend = _objects()
     context.args = ["2"]

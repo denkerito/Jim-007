@@ -19,7 +19,7 @@ Telegram -> Telegram Bot -> HTTP -> FastAPI -> PostgreSQL
 Il bot non accede direttamente al database e non contiene logica di dominio. Comunica con FastAPI attraverso un contratto HTTP e un token interno. FastAPI e inoltre il backend della futura web application.
 
 I messaggi workout usano `POST /internal/workout-events`. Il bot traduce soltanto
-`/workout`, testo libero e `/fine` nelle azioni `open`, `log` e `complete`, allegando
+`/workout`, testo libero e `/end` nelle azioni `open`, `log` e `complete`, allegando
 una idempotency key derivata dal Telegram update ID. FastAPI risolve l'identita,
 carica il contesto minimo e chiama Gemini tramite una porta applicativa
 provider-neutral. L'adapter concreto usa Gemini Developer API e structured output;
