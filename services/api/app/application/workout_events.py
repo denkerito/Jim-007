@@ -5,21 +5,25 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.application.commands import (
+    CancelWorkoutCommand,
     CompleteWorkoutCommand,
     CreateWorkoutCommand,
     ExerciseCatalogItem,
     InterpretationStatus,
     LogWorkoutMessageCommand,
     ProcessWorkoutEventCommand,
+    UndoWorkoutMessageCommand,
     WorkoutEventAction,
     WorkoutEventResult,
     WorkoutInterpretationContext,
 )
 from app.application.ports import ProcessedCommand, UnitOfWorkFactory, WorkoutTextInterpreter
 from app.application.services import (
+    CancelWorkout,
     CompleteWorkout,
     CreateWorkout,
     LogWorkoutMessage,
+    UndoWorkoutMessage,
     _verify_replay,
 )
 from app.domain.exceptions import (
@@ -58,6 +62,8 @@ class ProcessWorkoutEvent:
                     WorkoutEventAction.OPEN: "create_workout",
                     WorkoutEventAction.LOG: "log_workout_message",
                     WorkoutEventAction.COMPLETE: "complete_workout",
+                    WorkoutEventAction.CANCEL: "cancel_workout",
+                    WorkoutEventAction.UNDO: "undo_workout_message",
                 }
                 requested = ProcessedCommand(
                     idempotency_key=command.idempotency_key,
@@ -67,6 +73,8 @@ class ProcessWorkoutEvent:
                     resource_id=existing.resource_id,
                 )
                 _verify_replay(existing, requested)
+                if command.action is WorkoutEventAction.CANCEL:
+                    return WorkoutEventResult(kind="cancelled", replayed=True)
                 replayed_workout = await uow.workouts.get_by_id(
                     existing.resource_id, user.id
                 )
@@ -79,6 +87,7 @@ class ProcessWorkoutEvent:
                     WorkoutEventAction.OPEN: "opened",
                     WorkoutEventAction.LOG: "logged",
                     WorkoutEventAction.COMPLETE: "completed",
+                    WorkoutEventAction.UNDO: "undone",
                 }
                 return WorkoutEventResult(
                     kind=kinds[command.action],
@@ -150,6 +159,37 @@ class ProcessWorkoutEvent:
             return WorkoutEventResult(
                 kind="completed",
                 workout=result.value,
+                replayed=result.replayed,
+            )
+
+        if command.action is WorkoutEventAction.CANCEL:
+            if active is None:
+                raise NoActiveWorkoutError("There is no active workout to cancel")
+            result = await CancelWorkout(self._uow_factory).execute(
+                CancelWorkoutCommand(
+                    user_id=user.id,
+                    workout_id=active.id,
+                    idempotency_key=command.idempotency_key,
+                    request_hash=command.request_hash,
+                )
+            )
+            return WorkoutEventResult(kind="cancelled", replayed=result.replayed)
+
+        if command.action is WorkoutEventAction.UNDO:
+            if active is None:
+                raise NoActiveWorkoutError("There is no active workout to update")
+            result = await UndoWorkoutMessage(self._uow_factory).execute(
+                UndoWorkoutMessageCommand(
+                    user_id=user.id,
+                    workout_id=active.id,
+                    idempotency_key=command.idempotency_key,
+                    request_hash=command.request_hash,
+                )
+            )
+            return WorkoutEventResult(
+                kind="undone",
+                workout=result.workout,
+                removed_exercises=result.removed_exercises,
                 replayed=result.replayed,
             )
 

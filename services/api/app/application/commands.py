@@ -74,6 +74,8 @@ class WorkoutEventAction(StrEnum):
     OPEN = "open"
     LOG = "log"
     COMPLETE = "complete"
+    CANCEL = "cancel"
+    UNDO = "undo"
 
 
 class HistoryQueryKind(StrEnum):
@@ -191,6 +193,20 @@ class CompleteWorkoutCommand(CommandModel):
     request_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class CancelWorkoutCommand(CommandModel):
+    user_id: UUID
+    workout_id: UUID
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    request_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class UndoWorkoutMessageCommand(CommandModel):
+    user_id: UUID
+    workout_id: UUID
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    request_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class RegisterExternalIdentityCommand(CommandModel):
     provider: str = Field(min_length=1, max_length=32)
     provider_subject: str = Field(min_length=1, max_length=255)
@@ -218,9 +234,25 @@ class ProcessWorkoutEventCommand(CommandModel):
         text = (self.text or "").strip()
         if self.action is WorkoutEventAction.LOG and not text:
             raise ValueError("log events require text")
-        if self.action is WorkoutEventAction.COMPLETE and self.text is not None:
-            raise ValueError("complete events do not accept text")
+        if self.action in {
+            WorkoutEventAction.COMPLETE,
+            WorkoutEventAction.CANCEL,
+            WorkoutEventAction.UNDO,
+        } and self.text is not None:
+            raise ValueError(f"{self.action.value} events do not accept text")
         return self
+
+
+class GetWorkoutStatusCommand(CommandModel):
+    provider: str = Field(min_length=1, max_length=32)
+    provider_subject: str = Field(min_length=1, max_length=255)
+
+    @field_validator("provider", "provider_subject")
+    @classmethod
+    def identity_text_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
 
 
 class ProcessHistoryQueryCommand(CommandModel):
@@ -286,12 +318,39 @@ class LogWorkoutMessageResult:
 
 
 @dataclass(frozen=True, slots=True)
+class CancelWorkoutResult:
+    workout_id: UUID
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class UndoWorkoutMessageResult:
+    workout: Workout
+    removed_exercises: tuple[WorkoutExercise, ...]
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class WorkoutEventResult:
-    kind: Literal["opened", "logged", "completed", "needs_clarification"]
+    kind: Literal[
+        "opened",
+        "logged",
+        "completed",
+        "cancelled",
+        "undone",
+        "needs_clarification",
+    ]
     workout: Workout | None = None
     added_exercises: tuple[WorkoutExercise, ...] = ()
+    removed_exercises: tuple[WorkoutExercise, ...] = ()
     clarification_message: str | None = None
     replayed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class WorkoutStatusResult:
+    kind: Literal["none", "active"]
+    workout: Workout | None = None
 
 
 @dataclass(frozen=True, slots=True)

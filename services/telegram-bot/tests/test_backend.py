@@ -179,6 +179,85 @@ async def test_process_workout_event_preserves_backend_error_code() -> None:
 
 
 @pytest.mark.asyncio
+async def test_undo_parses_removed_exercises_and_updated_totals() -> None:
+    exercise = {
+        "exercise": {"name": "Bench Press"},
+        "sets": [{"repetitions": 8, "load": {"value": "80", "unit": "kg"}}],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["action"] == "undo"
+        return httpx.Response(
+            200,
+            json={
+                "kind": "undone",
+                "replayed": False,
+                "workout": {
+                    "performed_on": "2026-08-05",
+                    "exercises": [],
+                },
+                "removed_exercises": [exercise],
+            },
+        )
+
+    client = BackendClient(
+        base_url="http://backend",
+        internal_api_token="secret",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        result = await client.process_workout_event(
+            telegram_user_id=12345,
+            update_id=101,
+            action="undo",
+            text=None,
+        )
+    finally:
+        await client.close()
+
+    assert result.kind == "undone"
+    assert result.removed_exercises[0].name == "Bench Press"
+    assert result.total_exercises == 0
+    assert result.total_sets == 0
+
+
+@pytest.mark.asyncio
+async def test_get_active_workout_status_has_no_idempotency_key() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/internal/workout-status"
+        assert "Idempotency-Key" not in request.headers
+        assert json.loads(request.content) == {
+            "provider": "telegram",
+            "provider_subject": "12345",
+        }
+        return httpx.Response(
+            200,
+            json={
+                "kind": "active",
+                "workout": {
+                    "performed_on": "2026-08-05",
+                    "notes": "Push day",
+                    "exercises": [],
+                },
+            },
+        )
+
+    client = BackendClient(
+        base_url="http://backend",
+        internal_api_token="secret",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        result = await client.get_workout_status(telegram_user_id=12345)
+    finally:
+        await client.close()
+
+    assert result.kind == "active"
+    assert result.workout is not None
+    assert result.workout.notes == "Push day"
+
+
+@pytest.mark.asyncio
 async def test_query_exercise_history_sends_identity_and_parses_full_details() -> None:
     exercise_id = uuid4()
 

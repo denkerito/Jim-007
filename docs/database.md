@@ -30,6 +30,8 @@ Il database contiene dati applicativi strutturati. Il bot Telegram e il provider
 - note opzionali a livello di workout, esercizio eseguito e singolo set;
 - validazione tecnica e applicativa del DTO restituito dal LLM;
 - protezione dai doppi inserimenti tramite idempotency key;
+- annullamento atomico dell'ultimo messaggio registrato nel draft;
+- consultazione e cancellazione definitiva del draft attivo;
 - storico workout e storico esercizio;
 - record e statistiche calcolati dai dati normalizzati.
 
@@ -37,7 +39,7 @@ Il database contiene dati applicativi strutturati. Il bot Telegram e il provider
 
 - persistenza dei messaggi, delle interazioni e delle risposte del LLM;
 - conferma del workout prima del salvataggio;
-- correzioni in linguaggio naturale;
+- correzioni in linguaggio naturale diverse dall'annullamento dell'ultimo messaggio;
 - modifica e revisione di un workout gia salvato;
 - versionamento dei workout;
 - annullamento logico dei workout;
@@ -391,6 +393,7 @@ Indice per la history:
 | `user_id` | `UUID` | no | - | Ownership ridondante e verificabile |
 | `workout_id` | `UUID` | no | - | Workout contenitore |
 | `exercise_id` | `UUID` | no | - | Esercizio del catalogo personale |
+| `log_batch_id` | `UUID` | no | - | Identifica le occorrenze create dallo stesso messaggio |
 | `position` | `SMALLINT` | no | - | Ordine nel workout |
 | `notes` | `TEXT` | si | - | Note sull'esecuzione |
 
@@ -408,10 +411,12 @@ Indici:
 
 ```text
 (user_id, exercise_id, workout_id)
+(workout_id, log_batch_id)
 (workout_id, position)
 ```
 
-Il secondo indice puo essere gia coperto dal vincolo univoco.
+L'ultimo indice puo essere gia coperto dal vincolo univoco. La cancellazione
+dell'ultimo batch rimuove soltanto le posizioni finali e non richiede rinumerazione.
 
 ### 5.7 `performed_set`
 
@@ -475,7 +480,9 @@ Ogni comando applicativo usa una transazione distinta e una Unit of Work condivi
 1. la creazione inserisce un workout `draft` e impedisce un secondo draft dello stesso utente;
 2. l'aggiunta blocca il workout, verifica stato e ownership, risolve o crea l'esercizio e salva insieme `WorkoutExercise` e tutti i `PerformedSet`;
 3. il completamento blocca e valida l'aggregate prima della transizione a `completed`;
-4. la claim idempotente viene inserita nella stessa transazione della risorsa risultante;
-5. il commit avviene soltanto quando l'intero comando e valido.
+4. l'undo blocca il draft e cancella tutte le occorrenze dell'ultimo `log_batch_id`;
+5. il cancel blocca e cancella il draft con occorrenze e set, ma non gli esercizi del catalogo;
+6. la claim idempotente viene inserita nella stessa transazione della modifica;
+7. il commit avviene soltanto quando l'intero comando e valido.
 
 Se una qualsiasi operazione fallisce non rimangono blocchi parziali, esercizi orfani o claim idempotenti senza risultato. Modifiche concorrenti allo stesso workout sono serializzate con un lock sulla root; le collisioni sui nomi normalizzati usano il vincolo univoco e un upsert PostgreSQL.

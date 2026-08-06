@@ -1,7 +1,7 @@
 import logging
 from typing import Literal, cast
 
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.constants import ChatType
 from telegram.ext import (
     Application,
@@ -19,6 +19,7 @@ from app.backend import (
     HistoryQueryResult,
     WorkoutEventResult,
     WorkoutHistoryItem,
+    WorkoutStatusResult,
 )
 from app.config import get_settings
 
@@ -35,12 +36,41 @@ HISTORY_ERROR_MESSAGE = (
     "Non riesco a recuperare lo storico in questo momento. Riprova tra poco."
 )
 TELEGRAM_MESSAGE_LIMIT = 4096
+HELP_MESSAGE = (
+    "Comandi disponibili:\n"
+    "/start - registra il tuo profilo\n"
+    "/workout [data] - apre un workout, per esempio /workout ieri\n"
+    "Invia un messaggio testuale per registrare esercizi e serie\n"
+    "/status - mostra il workout aperto\n"
+    "/undo - annulla l'ultimo messaggio registrato\n"
+    "/end - completa il workout\n"
+    "/cancel - elimina il workout aperto\n"
+    "/history [limite] - mostra gli ultimi workout\n"
+    "/exercise <nome> [limite] - mostra lo storico di un esercizio\n"
+    "/help - mostra questo messaggio"
+)
 
 
 async def _close_backend(application: Application) -> None:
     backend = application.bot_data.get(BACKEND_CLIENT_KEY)
     if isinstance(backend, BackendClient):
         await backend.close()
+
+
+async def _set_bot_commands(application: Application) -> None:
+    await application.bot.set_my_commands(
+        (
+            BotCommand("start", "Registra il profilo"),
+            BotCommand("workout", "Apri un workout"),
+            BotCommand("status", "Mostra il workout aperto"),
+            BotCommand("undo", "Annulla l'ultimo inserimento"),
+            BotCommand("end", "Completa il workout"),
+            BotCommand("cancel", "Elimina il workout aperto"),
+            BotCommand("history", "Mostra lo storico workout"),
+            BotCommand("exercise", "Mostra lo storico esercizio"),
+            BotCommand("help", "Mostra i comandi disponibili"),
+        )
+    )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -103,7 +133,7 @@ async def _send_workout_event(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     *,
-    action: Literal["open", "log", "complete"],
+    action: Literal["open", "log", "complete", "cancel", "undo"],
     text: str | None,
 ) -> None:
     parts = _private_event_parts(update)
@@ -138,6 +168,7 @@ async def _send_workout_event(
             "noactiveworkout": "Non hai un workout aperto. Usa /workout per iniziare.",
             "active_workout_exists": "Hai gia un workout aperto. Usa /end per completarlo.",
             "invalidworkoutdate": "La data del workout non puo essere futura.",
+            "nothingtoundo": "Non ci sono inserimenti da annullare in questo workout.",
         }
         await message.reply_text(messages.get(error.code, WORKOUT_ERROR_MESSAGE))
         return
@@ -151,6 +182,55 @@ async def open_workout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def complete_workout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _send_workout_event(update, context, action="complete", text=None)
+
+
+async def cancel_workout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _send_workout_event(update, context, action="cancel", text=None)
+
+
+async def undo_workout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _send_workout_event(update, context, action="undo", text=None)
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    del context
+    message = update.effective_message
+    if message is not None:
+        await message.reply_text(HELP_MESSAGE)
+
+
+async def workout_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    user = update.effective_user
+    if message is None:
+        return
+    if chat is None or chat.type != ChatType.PRIVATE or user is None:
+        await message.reply_text(
+            "Per consultare il workout aperto, usa una chat privata con il bot."
+        )
+        return
+    backend_value = context.application.bot_data.get(BACKEND_CLIENT_KEY)
+    if backend_value is None:
+        logger.error("Backend client is not configured")
+        await message.reply_text(WORKOUT_ERROR_MESSAGE)
+        return
+    backend = cast(BackendClient, backend_value)
+    try:
+        result = await backend.get_workout_status(telegram_user_id=user.id)
+    except BackendError as error:
+        logger.warning(
+            "Workout status failed for update_id=%s",
+            update.update_id,
+            exc_info=True,
+        )
+        if error.code == "external_identity_not_registered":
+            await message.reply_text("Registrati prima con /start.")
+        else:
+            await message.reply_text(WORKOUT_ERROR_MESSAGE)
+        return
+    for chunk in _split_telegram_message(_format_workout_status(result)):
+        await message.reply_text(chunk)
 
 
 async def log_workout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -311,8 +391,36 @@ def _format_workout_result(result: WorkoutEventResult) -> str:
             "Workout completato \u2705\n"
             f"{result.total_exercises} esercizi, {result.total_sets} serie."
         )
+    if result.kind == "cancelled":
+        return "Workout eliminato."
+    if result.kind == "undone":
+        rendered = "\n\n".join(
+            _format_exercise(item) for item in result.removed_exercises
+        )
+        return (
+            "Ho annullato:\n"
+            f"{rendered}\n\n"
+            f"Nel workout restano {result.total_exercises} esercizi e "
+            f"{result.total_sets} serie."
+        )
     rendered = "\n\n".join(_format_exercise(item) for item in result.exercises)
     return f"Ho registrato:\n{rendered}"
+
+
+def _format_workout_status(result: WorkoutStatusResult) -> str:
+    if result.kind == "none" or result.workout is None:
+        return "Non hai un workout aperto. Usa /workout per iniziare."
+    workout = result.workout
+    lines = [f"Workout aperto del {workout.performed_on.strftime('%d/%m/%Y')}"]
+    if workout.notes:
+        lines.append(f"Note workout: {workout.notes}")
+    if not workout.exercises:
+        lines.append("Nessun esercizio registrato.")
+    else:
+        lines.append(
+            "\n\n".join(_format_history_exercise(item) for item in workout.exercises)
+        )
+    return "\n\n".join(lines)
 
 
 def _format_history_exercise(value: ExerciseSummary) -> str:
@@ -407,15 +515,20 @@ def main() -> None:
     application = (
         Application.builder()
         .token(settings.telegram_bot_token.get_secret_value())
+        .post_init(_set_bot_commands)
         .post_shutdown(_close_backend)
         .build()
     )
     application.bot_data[BACKEND_CLIENT_KEY] = backend
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("workout", open_workout))
+    application.add_handler(CommandHandler("status", workout_status))
+    application.add_handler(CommandHandler("undo", undo_workout))
     application.add_handler(CommandHandler("end", complete_workout))
+    application.add_handler(CommandHandler("cancel", cancel_workout))
     application.add_handler(CommandHandler("history", workout_history))
     application.add_handler(CommandHandler("exercise", exercise_history))
+    application.add_handler(CommandHandler("help", help_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, log_workout))
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 

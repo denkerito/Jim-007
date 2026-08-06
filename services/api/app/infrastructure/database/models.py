@@ -188,6 +188,9 @@ class WorkoutExercise(Base):
     exercise_id: Mapped[UUID] = mapped_column(
         PostgreSQLUUID(as_uuid=True), nullable=False
     )
+    log_batch_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), nullable=False
+    )
     position: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
     workout: Mapped[Workout] = relationship(
@@ -209,6 +212,12 @@ Index(
     WorkoutExercise.user_id,
     WorkoutExercise.exercise_id,
     WorkoutExercise.workout_id,
+)
+
+Index(
+    "ix_workout_exercise_workout_id_log_batch_id",
+    WorkoutExercise.workout_id,
+    WorkoutExercise.log_batch_id,
 )
 
 

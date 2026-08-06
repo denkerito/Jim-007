@@ -93,6 +93,10 @@ ogni messaggio testuale aggiunge uno o piu esercizi e `/end` completa il workout
 Un'interpretazione ambigua non produce scritture e genera una richiesta di
 chiarimento. Non e prevista conferma prima del salvataggio.
 
+`/status` mostra il contenuto completo del draft, `/undo` rimuove atomicamente
+tutti gli esercizi aggiunti dall'ultimo messaggio e `/cancel` elimina definitivamente
+il draft. `/help` riepiloga i comandi disponibili. Queste operazioni non usano l'LLM.
+
 Gli storici sono disponibili con `/history [limite]` e
 `/exercise <nome libero> [limite]`, con default 5 e massimo 20 risultati. Il primo
 comando mostra soltanto workout completati. Il secondo risolve prima un nome esatto

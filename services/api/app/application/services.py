@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 
 from app.application.commands import (
     AddExerciseToWorkoutCommand,
+    CancelWorkoutCommand,
+    CancelWorkoutResult,
     CommandResult,
     CompleteWorkoutCommand,
     CreateWorkoutCommand,
@@ -18,6 +20,8 @@ from app.application.commands import (
     PerformedSetInput,
     RegisterExternalIdentityCommand,
     RegistrationResult,
+    UndoWorkoutMessageCommand,
+    UndoWorkoutMessageResult,
 )
 from app.application.ports import ProcessedCommand, UnitOfWork, UnitOfWorkFactory
 from app.domain.exceptions import (
@@ -25,7 +29,9 @@ from app.domain.exceptions import (
     IdempotencyConflictError,
     InvalidWorkoutDateError,
     InvalidWorkoutStateError,
+    NoActiveWorkoutError,
     NotFoundError,
+    NothingToUndoError,
     WorkoutNotEditableError,
 )
 from app.domain.models import (
@@ -218,6 +224,7 @@ class AddExerciseToWorkout:
                 uow=uow,
                 user_id=command.user_id,
                 workout_id=workout.id,
+                log_batch_id=uuid4(),
                 occurrence_id=occurrence_id,
                 reference=command.exercise,
                 sets=command.sets,
@@ -234,6 +241,7 @@ async def _append_exercise(
     uow: UnitOfWork,
     user_id: UUID,
     workout_id: UUID,
+    log_batch_id: UUID,
     occurrence_id: UUID,
     reference: ExistingExerciseReference | NewExerciseReference,
     sets: tuple[PerformedSetInput, ...],
@@ -274,6 +282,7 @@ async def _append_exercise(
     return await uow.workouts.append_exercise(
         workout_id=workout_id,
         user_id=user_id,
+        log_batch_id=log_batch_id,
         occurrence_id=occurrence_id,
         exercise=exercise,
         notes=_clean_optional_text(notes),
@@ -320,6 +329,7 @@ class LogWorkoutMessage:
                 raise WorkoutNotEditableError("A completed workout cannot be changed")
 
             added: list[WorkoutExercise] = []
+            log_batch_id = uuid4()
             for interpreted in command.exercises:
                 reference: ExistingExerciseReference | NewExerciseReference
                 if interpreted.catalog_exercise_id is not None:
@@ -333,6 +343,7 @@ class LogWorkoutMessage:
                     uow=uow,
                     user_id=command.user_id,
                     workout_id=workout.id,
+                    log_batch_id=log_batch_id,
                     occurrence_id=uuid4(),
                     reference=reference,
                     sets=interpreted.sets,
@@ -346,6 +357,91 @@ class LogWorkoutMessage:
             return LogWorkoutMessageResult(
                 workout=workout,
                 added_exercises=tuple(added),
+                replayed=False,
+            )
+
+
+class CancelWorkout:
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    async def execute(self, command: CancelWorkoutCommand) -> CancelWorkoutResult:
+        processed = ProcessedCommand(
+            idempotency_key=command.idempotency_key,
+            user_id=command.user_id,
+            operation="cancel_workout",
+            request_hash=command.request_hash,
+            resource_id=command.workout_id,
+        )
+        async with self._uow_factory() as uow:
+            if not await uow.processed_commands.claim(processed):
+                existing = await uow.processed_commands.get(command.idempotency_key)
+                if existing is None:
+                    raise IdempotencyConflictError(
+                        "Idempotency claim disappeared unexpectedly"
+                    )
+                _verify_replay(existing, processed)
+                return CancelWorkoutResult(
+                    workout_id=existing.resource_id,
+                    replayed=True,
+                )
+
+            workout = await uow.workouts.get_for_update(
+                command.workout_id, command.user_id
+            )
+            if workout is None or workout.status is not WorkoutStatus.DRAFT:
+                raise NoActiveWorkoutError("There is no active workout to cancel")
+            await uow.workouts.delete(workout.id, command.user_id)
+            await uow.commit()
+            return CancelWorkoutResult(workout_id=workout.id, replayed=False)
+
+
+class UndoWorkoutMessage:
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    async def execute(
+        self, command: UndoWorkoutMessageCommand
+    ) -> UndoWorkoutMessageResult:
+        processed = ProcessedCommand(
+            idempotency_key=command.idempotency_key,
+            user_id=command.user_id,
+            operation="undo_workout_message",
+            request_hash=command.request_hash,
+            resource_id=command.workout_id,
+        )
+        async with self._uow_factory() as uow:
+            replay = await _claim_or_replay(
+                uow,
+                processed,
+                lambda resource_id: uow.workouts.get_by_id(
+                    resource_id, command.user_id
+                ),
+            )
+            if replay is not None:
+                return UndoWorkoutMessageResult(
+                    workout=replay.value,
+                    removed_exercises=(),
+                    replayed=True,
+                )
+
+            workout = await uow.workouts.get_for_update(
+                command.workout_id, command.user_id
+            )
+            if workout is None or workout.status is not WorkoutStatus.DRAFT:
+                raise NoActiveWorkoutError("There is no active workout to update")
+            removed = await uow.workouts.delete_last_log_batch(
+                workout.id, command.user_id
+            )
+            if not removed:
+                raise NothingToUndoError("The active workout has nothing to undo")
+            updated = await uow.workouts.get_by_id(workout.id, command.user_id)
+            if updated is None:
+                raise RuntimeError("Updated workout could not be loaded")
+            await uow.commit()
+            return UndoWorkoutMessageResult(
+                workout=updated,
+                removed_exercises=removed,
                 replayed=False,
             )
 

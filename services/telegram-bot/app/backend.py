@@ -63,11 +63,35 @@ class _WorkoutResponse(BaseModel):
 
 
 class _WorkoutEventResponse(BaseModel):
-    kind: Literal["opened", "logged", "completed", "needs_clarification"]
+    kind: Literal[
+        "opened",
+        "logged",
+        "completed",
+        "cancelled",
+        "undone",
+        "needs_clarification",
+    ]
     replayed: bool = False
     workout: _WorkoutResponse | None = None
     added_exercises: tuple[_WorkoutExerciseResponse, ...] = ()
+    removed_exercises: tuple[_WorkoutExerciseResponse, ...] = ()
     clarification_message: str | None = None
+
+
+class _NoActiveWorkoutStatusResponse(BaseModel):
+    kind: Literal["none"]
+
+
+class _ActiveWorkoutStatusResponse(BaseModel):
+    kind: Literal["active"]
+    workout: _WorkoutResponse
+
+
+_WorkoutStatusResponse = Annotated[
+    _NoActiveWorkoutStatusResponse | _ActiveWorkoutStatusResponse,
+    Field(discriminator="kind"),
+]
+_workout_status_adapter = TypeAdapter(_WorkoutStatusResponse)
 
 
 class _ExerciseHistoryItemResponse(BaseModel):
@@ -123,13 +147,21 @@ class ExerciseSummary:
 
 @dataclass(frozen=True, slots=True)
 class WorkoutEventResult:
-    kind: Literal["opened", "logged", "completed", "needs_clarification"]
+    kind: Literal[
+        "opened",
+        "logged",
+        "completed",
+        "cancelled",
+        "undone",
+        "needs_clarification",
+    ]
     replayed: bool
     performed_on: date | None
     exercises: tuple[ExerciseSummary, ...]
     total_exercises: int
     total_sets: int
     clarification_message: str | None
+    removed_exercises: tuple[ExerciseSummary, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +169,12 @@ class WorkoutHistoryItem:
     performed_on: date
     notes: str | None
     exercises: tuple[ExerciseSummary, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WorkoutStatusResult:
+    kind: Literal["none", "active"]
+    workout: WorkoutHistoryItem | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,7 +247,7 @@ class BackendClient:
         *,
         telegram_user_id: int,
         update_id: int,
-        action: Literal["open", "log", "complete"],
+        action: Literal["open", "log", "complete", "cancel", "undo"],
         text: str | None,
     ) -> WorkoutEventResult:
         payload: dict[str, Any] = {
@@ -236,15 +274,57 @@ class BackendClient:
             raise BackendError("Backend workout event failed") from error
 
         added = tuple(_exercise_summary(item) for item in parsed.added_exercises)
+        removed = tuple(
+            _exercise_summary(item) for item in parsed.removed_exercises
+        )
         workout_exercises = parsed.workout.exercises if parsed.workout is not None else ()
         return WorkoutEventResult(
             kind=parsed.kind,
             replayed=parsed.replayed,
             performed_on=parsed.workout.performed_on if parsed.workout is not None else None,
             exercises=added,
+            removed_exercises=removed,
             total_exercises=len(workout_exercises),
             total_sets=sum(len(item.sets) for item in workout_exercises),
             clarification_message=parsed.clarification_message,
+        )
+
+    async def get_workout_status(
+        self,
+        *,
+        telegram_user_id: int,
+    ) -> WorkoutStatusResult:
+        payload = {
+            "provider": "telegram",
+            "provider_subject": str(telegram_user_id),
+        }
+        try:
+            async with asyncio.timeout(12.0):
+                response = await self._client.post(
+                    "/internal/workout-status",
+                    json=payload,
+                )
+            if response.is_error:
+                detail = response.json().get("detail", {})
+                code = detail.get("code") if isinstance(detail, dict) else None
+                raise BackendError("Backend rejected workout status", code=code)
+            parsed = _workout_status_adapter.validate_python(response.json())
+        except BackendError:
+            raise
+        except (httpx.HTTPError, TimeoutError, ValidationError, ValueError) as error:
+            raise BackendError("Backend workout status failed") from error
+
+        if isinstance(parsed, _NoActiveWorkoutStatusResponse):
+            return WorkoutStatusResult(kind="none")
+        return WorkoutStatusResult(
+            kind="active",
+            workout=WorkoutHistoryItem(
+                performed_on=parsed.workout.performed_on,
+                notes=parsed.workout.notes,
+                exercises=tuple(
+                    _exercise_summary(item) for item in parsed.workout.exercises
+                ),
+            ),
         )
 
     async def query_history(

@@ -14,6 +14,7 @@ from app.application.commands import (
     WorkoutEventAction,
     WorkoutEventResult,
     WorkoutHistoryPage,
+    WorkoutStatusResult,
 )
 from app.domain import models as domain
 
@@ -93,9 +94,25 @@ class WorkoutEventRequest(ApiModel):
         text = (self.text or "").strip()
         if self.action is WorkoutEventAction.LOG and not text:
             raise ValueError("log events require text")
-        if self.action is WorkoutEventAction.COMPLETE and self.text is not None:
-            raise ValueError("complete events do not accept text")
+        if self.action in {
+            WorkoutEventAction.COMPLETE,
+            WorkoutEventAction.CANCEL,
+            WorkoutEventAction.UNDO,
+        } and self.text is not None:
+            raise ValueError(f"{self.action.value} events do not accept text")
         return self
+
+
+class WorkoutStatusRequest(ApiModel):
+    provider: str = Field(min_length=1, max_length=32)
+    provider_subject: str = Field(min_length=1, max_length=255)
+
+    @field_validator("provider", "provider_subject")
+    @classmethod
+    def identity_text_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
 
 
 class LoadResponse(ApiModel):
@@ -138,11 +155,34 @@ class WorkoutResponse(ApiModel):
 
 
 class WorkoutEventResponse(ApiModel):
-    kind: Literal["opened", "logged", "completed", "needs_clarification"]
+    kind: Literal[
+        "opened",
+        "logged",
+        "completed",
+        "cancelled",
+        "undone",
+        "needs_clarification",
+    ]
     replayed: bool = False
     workout: WorkoutResponse | None = None
     added_exercises: tuple[WorkoutExerciseResponse, ...] = ()
+    removed_exercises: tuple[WorkoutExerciseResponse, ...] = ()
     clarification_message: str | None = None
+
+
+class NoActiveWorkoutStatusResponse(ApiModel):
+    kind: Literal["none"]
+
+
+class ActiveWorkoutStatusResponse(ApiModel):
+    kind: Literal["active"]
+    workout: WorkoutResponse
+
+
+WorkoutStatusResponse = Annotated[
+    NoActiveWorkoutStatusResponse | ActiveWorkoutStatusResponse,
+    Field(discriminator="kind"),
+]
 
 
 class WorkoutHistoryPageResponse(ApiModel):
@@ -271,7 +311,21 @@ def workout_event_response(value: WorkoutEventResult) -> WorkoutEventResponse:
         added_exercises=tuple(
             workout_exercise_response(item) for item in value.added_exercises
         ),
+        removed_exercises=tuple(
+            workout_exercise_response(item) for item in value.removed_exercises
+        ),
         clarification_message=value.clarification_message,
+    )
+
+
+def workout_status_response(value: WorkoutStatusResult) -> WorkoutStatusResponse:
+    if value.kind == "none":
+        return NoActiveWorkoutStatusResponse(kind="none")
+    if value.workout is None:
+        raise RuntimeError("Active workout status is missing its workout")
+    return ActiveWorkoutStatusResponse(
+        kind="active",
+        workout=workout_response(value.workout),
     )
 
 

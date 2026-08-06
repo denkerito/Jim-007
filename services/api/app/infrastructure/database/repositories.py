@@ -3,7 +3,7 @@
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import func, select, tuple_, update
+from sqlalchemy import delete, func, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -283,6 +283,7 @@ class SqlAlchemyWorkoutRepository:
         *,
         workout_id: UUID,
         user_id: UUID,
+        log_batch_id: UUID,
         occurrence_id: UUID,
         exercise: Exercise,
         notes: str | None,
@@ -298,6 +299,7 @@ class SqlAlchemyWorkoutRepository:
             user_id=user_id,
             workout_id=workout_id,
             exercise_id=exercise.id,
+            log_batch_id=log_batch_id,
             position=int(current_position or 0) + 1,
             notes=notes,
         )
@@ -327,6 +329,57 @@ class SqlAlchemyWorkoutRepository:
         if loaded is None:
             raise RuntimeError("Created workout exercise could not be loaded")
         return to_workout_exercise(loaded)
+
+    async def delete(self, workout_id: UUID, user_id: UUID) -> None:
+        await self._session.execute(
+            delete(orm.Workout).where(
+                orm.Workout.id == workout_id,
+                orm.Workout.user_id == user_id,
+                orm.Workout.status == "draft",
+            )
+        )
+        await self._session.flush()
+
+    async def delete_last_log_batch(
+        self, workout_id: UUID, user_id: UUID
+    ) -> tuple[WorkoutExercise, ...]:
+        latest_batch_id = await self._session.scalar(
+            select(orm.WorkoutExercise.log_batch_id)
+            .where(
+                orm.WorkoutExercise.workout_id == workout_id,
+                orm.WorkoutExercise.user_id == user_id,
+            )
+            .order_by(orm.WorkoutExercise.position.desc())
+            .limit(1)
+        )
+        if latest_batch_id is None:
+            return ()
+        models = tuple(
+            await self._session.scalars(
+                select(orm.WorkoutExercise)
+                .where(
+                    orm.WorkoutExercise.workout_id == workout_id,
+                    orm.WorkoutExercise.user_id == user_id,
+                    orm.WorkoutExercise.log_batch_id == latest_batch_id,
+                )
+                .options(
+                    selectinload(orm.WorkoutExercise.exercise),
+                    selectinload(orm.WorkoutExercise.sets),
+                )
+                .order_by(orm.WorkoutExercise.position)
+            )
+        )
+        removed = tuple(to_workout_exercise(model) for model in models)
+        await self._session.execute(
+            delete(orm.WorkoutExercise).where(
+                orm.WorkoutExercise.workout_id == workout_id,
+                orm.WorkoutExercise.user_id == user_id,
+                orm.WorkoutExercise.log_batch_id == latest_batch_id,
+            )
+        )
+        await self._session.flush()
+        self._session.expire_all()
+        return removed
 
     async def complete(self, workout_id: UUID, user_id: UUID) -> Workout:
         await self._session.execute(

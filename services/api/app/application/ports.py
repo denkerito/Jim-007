@@ -114,11 +114,18 @@ class WorkoutRepository(Protocol):
         *,
         workout_id: UUID,
         user_id: UUID,
+        log_batch_id: UUID,
         occurrence_id: UUID,
         exercise: Exercise,
         notes: str | None,
         sets: tuple[tuple[UUID, int, Load | None, str | None], ...],
     ) -> WorkoutExercise: ...
+
+    async def delete(self, workout_id: UUID, user_id: UUID) -> None: ...
+
+    async def delete_last_log_batch(
+        self, workout_id: UUID, user_id: UUID
+    ) -> tuple[WorkoutExercise, ...]: ...
 
     async def complete(self, workout_id: UUID, user_id: UUID) -> Workout: ...
 

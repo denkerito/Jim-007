@@ -13,18 +13,25 @@ from app.backend import (
     SetSummary,
     WorkoutEventResult,
     WorkoutHistoryItem,
+    WorkoutStatusResult,
 )
 from telegram.constants import ChatType
 
 from app.main import (
     BACKEND_CLIENT_KEY,
+    HELP_MESSAGE,
     REGISTRATION_ERROR_MESSAGE,
     _format_decimal,
+    _format_workout_status,
     _split_telegram_message,
+    cancel_workout,
     exercise_history,
+    help_command,
     log_workout,
     open_workout,
     start,
+    undo_workout,
+    workout_status,
     workout_history,
 )
 
@@ -65,6 +72,7 @@ def _objects(*, chat_type=ChatType.PRIVATE, user=True):
     backend = SimpleNamespace(
         register_telegram_user=AsyncMock(),
         process_workout_event=AsyncMock(),
+        get_workout_status=AsyncMock(),
         query_history=AsyncMock(),
     )
     context = SimpleNamespace(
@@ -209,6 +217,98 @@ async def test_active_workout_points_to_end_command() -> None:
 
     message.reply_text.assert_awaited_once_with(
         "Hai gia un workout aperto. Usa /end per completarlo."
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_sends_event_and_confirms_permanent_deletion() -> None:
+    update, context, message, backend = _objects()
+    backend.process_workout_event.return_value = WorkoutEventResult(
+        kind="cancelled",
+        replayed=False,
+        performed_on=None,
+        exercises=(),
+        total_exercises=0,
+        total_sets=0,
+        clarification_message=None,
+    )
+
+    await cancel_workout(update, context)
+
+    backend.process_workout_event.assert_awaited_once_with(
+        telegram_user_id=12345,
+        update_id=987,
+        action="cancel",
+        text=None,
+    )
+    message.reply_text.assert_awaited_once_with("Workout eliminato.")
+
+
+@pytest.mark.asyncio
+async def test_undo_formats_the_removed_message_batch() -> None:
+    update, context, message, backend = _objects()
+    removed = ExerciseSummary(
+        name="Bench Press",
+        sets=(SetSummary(8, Decimal("80"), "kg"),),
+    )
+    backend.process_workout_event.return_value = WorkoutEventResult(
+        kind="undone",
+        replayed=False,
+        performed_on=date(2026, 8, 5),
+        exercises=(),
+        removed_exercises=(removed,),
+        total_exercises=1,
+        total_sets=3,
+        clarification_message=None,
+    )
+
+    await undo_workout(update, context)
+
+    backend.process_workout_event.assert_awaited_once_with(
+        telegram_user_id=12345,
+        update_id=987,
+        action="undo",
+        text=None,
+    )
+    message.reply_text.assert_awaited_once_with(
+        "Ho annullato:\nBench Press\n80 kg × 8\n\n"
+        "Nel workout restano 1 esercizi e 3 serie."
+    )
+
+
+@pytest.mark.asyncio
+async def test_help_is_local_and_does_not_require_registration() -> None:
+    update, context, message, backend = _objects(user=False)
+
+    await help_command(update, context)
+
+    backend.register_telegram_user.assert_not_awaited()
+    backend.process_workout_event.assert_not_awaited()
+    message.reply_text.assert_awaited_once_with(HELP_MESSAGE)
+
+
+@pytest.mark.asyncio
+async def test_status_formats_complete_active_draft() -> None:
+    update, context, message, backend = _objects()
+    backend.get_workout_status.return_value = WorkoutStatusResult(
+        kind="active",
+        workout=WorkoutHistoryItem(
+            performed_on=date(2026, 8, 5),
+            notes="Push day",
+            exercises=(
+                ExerciseSummary(
+                    name="Bench Press",
+                    sets=(SetSummary(8, Decimal("80"), "kg"),),
+                ),
+            ),
+        ),
+    )
+
+    await workout_status(update, context)
+
+    backend.get_workout_status.assert_awaited_once_with(telegram_user_id=12345)
+    message.reply_text.assert_awaited_once_with(
+        _format_workout_status(backend.get_workout_status.return_value)
     )
 
 

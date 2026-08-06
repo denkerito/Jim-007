@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date
 from uuid import uuid4
 
@@ -13,7 +14,13 @@ from app.application.commands import (
     WorkoutDateInterpretation,
     WorkoutLogInterpretation,
 )
-from app.infrastructure.database.models import Exercise, PerformedSet, WorkoutExercise
+from app.infrastructure.database.models import (
+    Exercise,
+    PerformedSet,
+    ProcessedCommand,
+    Workout,
+    WorkoutExercise,
+)
 from app.infrastructure.database.uow import SqlAlchemyUnitOfWork
 from app.main import app
 
@@ -186,5 +193,222 @@ async def test_clarification_and_atomic_invalid_catalog_id_write_nothing(
             assert await session.scalar(select(func.count()).select_from(Exercise)) == 0
             assert await session.scalar(select(func.count()).select_from(WorkoutExercise)) == 0
             assert await session.scalar(select(func.count()).select_from(PerformedSet)) == 0
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_status_undo_batches_and_permanent_cancel(session_factory) -> None:
+    interpreter = FakeInterpreter()
+    app.dependency_overrides[get_uow_factory] = lambda: lambda: SqlAlchemyUnitOfWork(
+        session_factory
+    )
+    app.dependency_overrides[get_workout_text_interpreter] = lambda: interpreter
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            await client.post(
+                "/internal/identities/telegram",
+                headers={"Authorization": "Bearer integration-secret"},
+                json={"telegram_user_id": 22222},
+            )
+            base = {"provider": "telegram", "provider_subject": "22222"}
+
+            no_status = await client.post(
+                "/internal/workout-status",
+                headers={"Authorization": "Bearer integration-secret"},
+                json=base,
+            )
+            assert no_status.status_code == 200
+            assert no_status.json() == {"kind": "none"}
+
+            await client.post(
+                "/internal/workout-events",
+                headers=_headers("batch-open"),
+                json={**base, "action": "open", "text": None},
+            )
+            interpreter.log_result = WorkoutLogInterpretation(
+                status=InterpretationStatus.READY,
+                exercises=(
+                    InterpretedExercise(
+                        name="Squat",
+                        sets=(PerformedSetInput(repetitions=5, load_value="100"),),
+                    ),
+                ),
+            )
+            await client.post(
+                "/internal/workout-events",
+                headers=_headers("batch-one"),
+                json={**base, "action": "log", "text": "squat 100x5"},
+            )
+            interpreter.log_result = WorkoutLogInterpretation(
+                status=InterpretationStatus.READY,
+                exercises=(
+                    InterpretedExercise(
+                        name="Bench Press",
+                        sets=(PerformedSetInput(repetitions=8, load_value="80"),),
+                    ),
+                    InterpretedExercise(
+                        name="Lat Machine",
+                        sets=(PerformedSetInput(repetitions=10, load_value="70"),),
+                    ),
+                ),
+            )
+            await client.post(
+                "/internal/workout-events",
+                headers=_headers("batch-two"),
+                json={**base, "action": "log", "text": "panca e lat machine"},
+            )
+
+            active_status = await client.post(
+                "/internal/workout-status",
+                headers={"Authorization": "Bearer integration-secret"},
+                json=base,
+            )
+            assert active_status.status_code == 200
+            assert active_status.json()["kind"] == "active"
+            assert len(active_status.json()["workout"]["exercises"]) == 3
+
+            undone = await client.post(
+                "/internal/workout-events",
+                headers=_headers("undo-two"),
+                json={**base, "action": "undo", "text": None},
+            )
+            assert undone.status_code == 200, undone.text
+            assert undone.json()["kind"] == "undone"
+            assert [
+                item["exercise"]["name"]
+                for item in undone.json()["removed_exercises"]
+            ] == ["Bench Press", "Lat Machine"]
+            assert [
+                item["exercise"]["name"]
+                for item in undone.json()["workout"]["exercises"]
+            ] == ["Squat"]
+
+            undo_replay = await client.post(
+                "/internal/workout-events",
+                headers=_headers("undo-two"),
+                json={**base, "action": "undo", "text": None},
+            )
+            assert undo_replay.status_code == 200
+            assert undo_replay.json()["replayed"] is True
+            assert undo_replay.json()["removed_exercises"] == []
+
+            last_undo = await client.post(
+                "/internal/workout-events",
+                headers=_headers("undo-one"),
+                json={**base, "action": "undo", "text": None},
+            )
+            assert last_undo.status_code == 200
+            assert last_undo.json()["workout"]["exercises"] == []
+
+            nothing = await client.post(
+                "/internal/workout-events",
+                headers=_headers("undo-empty"),
+                json={**base, "action": "undo", "text": None},
+            )
+            assert nothing.status_code == 409
+            assert nothing.json()["detail"]["code"] == "nothingtoundo"
+
+            interpreter.log_result = WorkoutLogInterpretation(
+                status=InterpretationStatus.READY,
+                exercises=(
+                    InterpretedExercise(
+                        name="Squat",
+                        sets=(PerformedSetInput(repetitions=3, load_value="110"),),
+                    ),
+                ),
+            )
+            await client.post(
+                "/internal/workout-events",
+                headers=_headers("log-before-cancel"),
+                json={**base, "action": "log", "text": "squat 110x3"},
+            )
+            cancelled = await client.post(
+                "/internal/workout-events",
+                headers=_headers("cancel-draft"),
+                json={**base, "action": "cancel", "text": None},
+            )
+            assert cancelled.status_code == 200
+            assert cancelled.json()["kind"] == "cancelled"
+            assert cancelled.json()["workout"] is None
+
+            cancel_replay = await client.post(
+                "/internal/workout-events",
+                headers=_headers("cancel-draft"),
+                json={**base, "action": "cancel", "text": None},
+            )
+            assert cancel_replay.status_code == 200
+            assert cancel_replay.json()["replayed"] is True
+
+            reopened = await client.post(
+                "/internal/workout-events",
+                headers=_headers("open-after-cancel"),
+                json={**base, "action": "open", "text": None},
+            )
+            assert reopened.status_code == 200
+
+        async with session_factory() as session:
+            assert await session.scalar(select(func.count()).select_from(Workout)) == 1
+            assert (
+                await session.scalar(select(func.count()).select_from(WorkoutExercise))
+                == 0
+            )
+            assert (
+                await session.scalar(select(func.count()).select_from(PerformedSet)) == 0
+            )
+            assert await session.scalar(select(func.count()).select_from(Exercise)) == 3
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_cancel_is_serialized_and_leaves_one_claim(
+    session_factory,
+) -> None:
+    interpreter = FakeInterpreter()
+    app.dependency_overrides[get_uow_factory] = lambda: lambda: SqlAlchemyUnitOfWork(
+        session_factory
+    )
+    app.dependency_overrides[get_workout_text_interpreter] = lambda: interpreter
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            await client.post(
+                "/internal/identities/telegram",
+                headers={"Authorization": "Bearer integration-secret"},
+                json={"telegram_user_id": 33333},
+            )
+            base = {"provider": "telegram", "provider_subject": "33333"}
+            await client.post(
+                "/internal/workout-events",
+                headers=_headers("concurrent-open"),
+                json={**base, "action": "open", "text": None},
+            )
+
+            first, second = await asyncio.gather(
+                client.post(
+                    "/internal/workout-events",
+                    headers=_headers("concurrent-cancel-one"),
+                    json={**base, "action": "cancel", "text": None},
+                ),
+                client.post(
+                    "/internal/workout-events",
+                    headers=_headers("concurrent-cancel-two"),
+                    json={**base, "action": "cancel", "text": None},
+                ),
+            )
+            assert sorted((first.status_code, second.status_code)) == [200, 409]
+            failed = first if first.status_code == 409 else second
+            assert failed.json()["detail"]["code"] == "noactiveworkout"
+
+        async with session_factory() as session:
+            assert await session.scalar(select(func.count()).select_from(Workout)) == 0
+            cancel_claims = await session.scalar(
+                select(func.count())
+                .select_from(ProcessedCommand)
+                .where(ProcessedCommand.operation == "cancel_workout")
+            )
+            assert cancel_claims == 1
     finally:
         app.dependency_overrides.clear()

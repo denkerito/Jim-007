@@ -18,9 +18,10 @@ Telegram -> Telegram Bot -> HTTP -> FastAPI -> PostgreSQL
 
 Il bot non accede direttamente al database e non contiene logica di dominio. Comunica con FastAPI attraverso un contratto HTTP e un token interno. FastAPI e inoltre il backend della futura web application.
 
-I messaggi workout usano `POST /internal/workout-events`. Il bot traduce soltanto
-`/workout`, testo libero e `/end` nelle azioni `open`, `log` e `complete`, allegando
-una idempotency key derivata dal Telegram update ID. FastAPI risolve l'identita,
+I messaggi workout usano `POST /internal/workout-events`. Il bot traduce
+`/workout`, testo libero, `/end`, `/cancel` e `/undo` nelle azioni `open`, `log`,
+`complete`, `cancel` e `undo`, allegando una idempotency key derivata dal Telegram
+update ID. FastAPI risolve l'identita,
 carica il contesto minimo e chiama Gemini tramite una porta applicativa
 provider-neutral. L'adapter concreto usa Gemini Developer API e structured output;
 non vengono abilitati tool o accessi al database.
@@ -29,6 +30,11 @@ La chiamata LLM avviene senza una transazione database aperta. Dopo la risposta,
 FastAPI valida nuovamente il DTO, blocca il draft e persiste tutti gli esercizi del
 messaggio in una singola transazione. Un errore su un esercizio annulla l'intero
 messaggio.
+
+Tutte le occorrenze create dallo stesso messaggio condividono un `log_batch_id`.
+`/undo` blocca il draft e cancella l'ultimo batch completo; `/cancel` cancella
+fisicamente il draft e i suoi figli, conservando catalogo personale e claim
+idempotenti. Il replay dello stesso `/cancel` rimane valido anche senza la risorsa.
 
 Il comando Telegram `/start`, accettato solo in chat privata, registra o risolve
 l'identita esterna tramite `POST /internal/identities/telegram`. FastAPI usa la
@@ -41,6 +47,10 @@ provider LLM; `/exercise` evita la chiamata esterna per un nome normalizzato esa
 e usa Gemini soltanto per scegliere un ID gia presente nel catalogo personale. La
 chiamata LLM avviene senza transazioni aperte e il risultato viene validato contro
 il catalogo prima della query finale.
+
+`/status` usa invece `POST /internal/workout-status`: e una query read-only senza
+idempotency key che restituisce il draft completo oppure `kind = none`. `/help` e
+gestito localmente dal bot e non richiede registrazione.
 
 ## Layer dell'API
 

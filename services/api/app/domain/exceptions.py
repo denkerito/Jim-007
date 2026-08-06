@@ -41,6 +41,10 @@ class NoActiveWorkoutError(ConflictError):
     """The user has no draft workout to update or complete."""
 
 
+class NothingToUndoError(ConflictError):
+    """The active workout has no logged message to undo."""
+
+
 class InvalidWorkoutDateError(DomainError):
     """The requested workout date violates tracking rules."""
 
