@@ -17,6 +17,7 @@ from app.application.commands import (
     WorkoutEventResult,
     WorkoutInterpretationContext,
 )
+from app.application.idempotency import CommandOperation, verify_replay
 from app.application.ports import ProcessedCommand, UnitOfWorkFactory, WorkoutTextInterpreter
 from app.application.services import (
     CancelWorkout,
@@ -24,7 +25,6 @@ from app.application.services import (
     CreateWorkout,
     LogWorkoutMessage,
     UndoWorkoutMessage,
-    _verify_replay,
 )
 from app.domain.exceptions import (
     ActiveWorkoutExistsError,
@@ -32,6 +32,7 @@ from app.domain.exceptions import (
     NoActiveWorkoutError,
     NotFoundError,
 )
+from app.domain.models import Exercise, User, Workout
 
 
 class ProcessWorkoutEvent:
@@ -59,11 +60,11 @@ class ProcessWorkoutEvent:
             existing = await uow.processed_commands.get(command.idempotency_key)
             if existing is not None:
                 operations = {
-                    WorkoutEventAction.OPEN: "create_workout",
-                    WorkoutEventAction.LOG: "log_workout_message",
-                    WorkoutEventAction.COMPLETE: "complete_workout",
-                    WorkoutEventAction.CANCEL: "cancel_workout",
-                    WorkoutEventAction.UNDO: "undo_workout_message",
+                    WorkoutEventAction.OPEN: CommandOperation.CREATE_WORKOUT,
+                    WorkoutEventAction.LOG: CommandOperation.LOG_WORKOUT_MESSAGE,
+                    WorkoutEventAction.COMPLETE: CommandOperation.COMPLETE_WORKOUT,
+                    WorkoutEventAction.CANCEL: CommandOperation.CANCEL_WORKOUT,
+                    WorkoutEventAction.UNDO: CommandOperation.UNDO_WORKOUT_MESSAGE,
                 }
                 requested = ProcessedCommand(
                     idempotency_key=command.idempotency_key,
@@ -72,7 +73,7 @@ class ProcessWorkoutEvent:
                     request_hash=command.request_hash,
                     resource_id=existing.resource_id,
                 )
-                _verify_replay(existing, requested)
+                verify_replay(existing, requested)
                 if command.action is WorkoutEventAction.CANCEL:
                     return WorkoutEventResult(kind="cancelled", replayed=True)
                 replayed_workout = await uow.workouts.get_by_id(
@@ -82,7 +83,7 @@ class ProcessWorkoutEvent:
                     raise NotFoundError("The previously processed workout no longer exists")
                 kinds: dict[
                     WorkoutEventAction,
-                    Literal["opened", "logged", "completed"],
+                    Literal["opened", "logged", "completed", "undone"],
                 ] = {
                     WorkoutEventAction.OPEN: "opened",
                     WorkoutEventAction.LOG: "logged",
@@ -103,47 +104,15 @@ class ProcessWorkoutEvent:
             if command.action is WorkoutEventAction.LOG:
                 if active is None:
                     raise NoActiveWorkoutError("Open a workout with /workout first")
-        current_date = datetime.now(ZoneInfo(user.timezone)).date()
         context = WorkoutInterpretationContext(
             locale=user.locale,
             timezone=user.timezone,
-            current_date=current_date,
+            current_date=datetime.now(ZoneInfo(user.timezone)).date(),
             preferred_load_unit=user.preferred_load_unit,
         )
 
         if command.action is WorkoutEventAction.OPEN:
-            if active is not None:
-                raise ActiveWorkoutExistsError(active.id)
-            text = (command.text or "").strip()
-            if text:
-                interpretation = await self._interpreter.interpret_date(
-                    text=text,
-                    context=context,
-                )
-                if interpretation.status is InterpretationStatus.NEEDS_CLARIFICATION:
-                    return WorkoutEventResult(
-                        kind="needs_clarification",
-                        clarification_message=interpretation.clarification_message,
-                    )
-                performed_on = interpretation.performed_on
-                notes = interpretation.notes
-            else:
-                performed_on = current_date
-                notes = None
-            result = await CreateWorkout(self._uow_factory).execute(
-                CreateWorkoutCommand(
-                    user_id=user.id,
-                    idempotency_key=command.idempotency_key,
-                    request_hash=command.request_hash,
-                    performed_on=performed_on,
-                    notes=notes,
-                )
-            )
-            return WorkoutEventResult(
-                kind="opened",
-                workout=result.value,
-                replayed=result.replayed,
-            )
+            return await self._open(command, user, active, context)
 
         if command.action is WorkoutEventAction.COMPLETE:
             if active is None:
@@ -193,7 +162,57 @@ class ProcessWorkoutEvent:
                 replayed=result.replayed,
             )
 
-        if active is None:  # Defensive: the LOG branch checked this before the LLM call.
+        return await self._log(command, user, active, context, catalog_values)
+
+    async def _open(
+        self,
+        command: ProcessWorkoutEventCommand,
+        user: User,
+        active: Workout | None,
+        context: WorkoutInterpretationContext,
+    ) -> WorkoutEventResult:
+        if active is not None:
+            raise ActiveWorkoutExistsError(active.id)
+        text = (command.text or "").strip()
+        if text:
+            interpretation = await self._interpreter.interpret_date(
+                text=text,
+                context=context,
+            )
+            if interpretation.status is InterpretationStatus.NEEDS_CLARIFICATION:
+                return WorkoutEventResult(
+                    kind="needs_clarification",
+                    clarification_message=interpretation.clarification_message,
+                )
+            performed_on = interpretation.performed_on
+            notes = interpretation.notes
+        else:
+            performed_on = context.current_date
+            notes = None
+        result = await CreateWorkout(self._uow_factory).execute(
+            CreateWorkoutCommand(
+                user_id=user.id,
+                idempotency_key=command.idempotency_key,
+                request_hash=command.request_hash,
+                performed_on=performed_on,
+                notes=notes,
+            )
+        )
+        return WorkoutEventResult(
+            kind="opened",
+            workout=result.value,
+            replayed=result.replayed,
+        )
+
+    async def _log(
+        self,
+        command: ProcessWorkoutEventCommand,
+        user: User,
+        active: Workout | None,
+        context: WorkoutInterpretationContext,
+        catalog_values: tuple[Exercise, ...],
+    ) -> WorkoutEventResult:
+        if active is None:  # Defensive: execute checked this before the LLM call.
             raise NoActiveWorkoutError("Open a workout with /workout first")
         interpretation = await self._interpreter.interpret_exercises(
             text=(command.text or "").strip(),

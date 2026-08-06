@@ -17,13 +17,10 @@ from app.backend import (
 )
 from telegram.constants import ChatType
 
-from app.main import (
+from app.handlers import (
     BACKEND_CLIENT_KEY,
     HELP_MESSAGE,
     REGISTRATION_ERROR_MESSAGE,
-    _format_decimal,
-    _format_workout_status,
-    _split_telegram_message,
     cancel_workout,
     exercise_history,
     help_command,
@@ -33,6 +30,11 @@ from app.main import (
     undo_workout,
     workout_status,
     workout_history,
+)
+from app.presentation import (
+    _format_decimal,
+    _format_workout_status,
+    _split_telegram_message,
 )
 
 

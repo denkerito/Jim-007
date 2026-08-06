@@ -1,8 +1,6 @@
 """Transport-independent application use cases."""
 
-from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
-from typing import TypeVar
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -23,6 +21,7 @@ from app.application.commands import (
     UndoWorkoutMessageCommand,
     UndoWorkoutMessageResult,
 )
+from app.application.idempotency import CommandOperation, claim_or_replay, verify_replay
 from app.application.ports import ProcessedCommand, UnitOfWork, UnitOfWorkFactory
 from app.domain.exceptions import (
     ActiveWorkoutExistsError,
@@ -42,9 +41,6 @@ from app.domain.models import (
     WorkoutStatus,
 )
 from app.domain.normalization import clean_required_text, normalize_exercise_name
-
-
-ResourceT = TypeVar("ResourceT", Workout, WorkoutExercise)
 
 
 def _clean_optional_text(value: str | None) -> str | None:
@@ -103,43 +99,6 @@ class RegisterExternalIdentity:
             return RegistrationResult(user=user, identity=identity, created=True)
 
 
-def _verify_replay(existing: ProcessedCommand, requested: ProcessedCommand) -> None:
-    legacy_create = (
-        existing.operation == "legacy_create_workout"
-        and requested.operation == "create_workout"
-    )
-    if (
-        existing.user_id != requested.user_id
-        or (
-            not legacy_create
-            and (
-                existing.operation != requested.operation
-                or existing.request_hash != requested.request_hash
-            )
-        )
-    ):
-        raise IdempotencyConflictError(
-            "The idempotency key was already used for a different command"
-        )
-
-
-async def _claim_or_replay(
-    uow: UnitOfWork,
-    requested: ProcessedCommand,
-    loader: Callable[[UUID], Awaitable[ResourceT | None]],
-) -> CommandResult[ResourceT] | None:
-    if await uow.processed_commands.claim(requested):
-        return None
-    existing = await uow.processed_commands.get(requested.idempotency_key)
-    if existing is None:
-        raise IdempotencyConflictError("Idempotency claim disappeared unexpectedly")
-    _verify_replay(existing, requested)
-    resource = await loader(existing.resource_id)
-    if resource is None:
-        raise IdempotencyConflictError("The idempotent result no longer exists")
-    return CommandResult(resource, replayed=True)
-
-
 class CreateWorkout:
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self._uow_factory = uow_factory
@@ -149,12 +108,12 @@ class CreateWorkout:
         processed = ProcessedCommand(
             idempotency_key=command.idempotency_key,
             user_id=command.user_id,
-            operation="create_workout",
+            operation=CommandOperation.CREATE_WORKOUT,
             request_hash=command.request_hash,
             resource_id=workout_id,
         )
         async with self._uow_factory() as uow:
-            replay = await _claim_or_replay(
+            replay = await claim_or_replay(
                 uow,
                 processed,
                 lambda resource_id: uow.workouts.get_by_id(resource_id, command.user_id),
@@ -194,7 +153,7 @@ class AddExerciseToWorkout:
         processed = ProcessedCommand(
             idempotency_key=command.idempotency_key,
             user_id=command.user_id,
-            operation="add_workout_exercise",
+            operation=CommandOperation.ADD_WORKOUT_EXERCISE,
             request_hash=command.request_hash,
             resource_id=occurrence_id,
         )
@@ -205,7 +164,7 @@ class AddExerciseToWorkout:
                     return None
                 return next((item for item in workout.exercises if item.id == resource_id), None)
 
-            replay = await _claim_or_replay(uow, processed, load_occurrence)
+            replay = await claim_or_replay(uow, processed, load_occurrence)
             if replay is not None:
                 return replay
 
@@ -300,12 +259,12 @@ class LogWorkoutMessage:
         processed = ProcessedCommand(
             idempotency_key=command.idempotency_key,
             user_id=command.user_id,
-            operation="log_workout_message",
+            operation=CommandOperation.LOG_WORKOUT_MESSAGE,
             request_hash=command.request_hash,
             resource_id=command.workout_id,
         )
         async with self._uow_factory() as uow:
-            replay = await _claim_or_replay(
+            replay = await claim_or_replay(
                 uow,
                 processed,
                 lambda resource_id: uow.workouts.get_by_id(resource_id, command.user_id),
@@ -369,7 +328,7 @@ class CancelWorkout:
         processed = ProcessedCommand(
             idempotency_key=command.idempotency_key,
             user_id=command.user_id,
-            operation="cancel_workout",
+            operation=CommandOperation.CANCEL_WORKOUT,
             request_hash=command.request_hash,
             resource_id=command.workout_id,
         )
@@ -380,7 +339,7 @@ class CancelWorkout:
                     raise IdempotencyConflictError(
                         "Idempotency claim disappeared unexpectedly"
                     )
-                _verify_replay(existing, processed)
+                verify_replay(existing, processed)
                 return CancelWorkoutResult(
                     workout_id=existing.resource_id,
                     replayed=True,
@@ -406,12 +365,12 @@ class UndoWorkoutMessage:
         processed = ProcessedCommand(
             idempotency_key=command.idempotency_key,
             user_id=command.user_id,
-            operation="undo_workout_message",
+            operation=CommandOperation.UNDO_WORKOUT_MESSAGE,
             request_hash=command.request_hash,
             resource_id=command.workout_id,
         )
         async with self._uow_factory() as uow:
-            replay = await _claim_or_replay(
+            replay = await claim_or_replay(
                 uow,
                 processed,
                 lambda resource_id: uow.workouts.get_by_id(
@@ -454,12 +413,12 @@ class CompleteWorkout:
         processed = ProcessedCommand(
             idempotency_key=command.idempotency_key,
             user_id=command.user_id,
-            operation="complete_workout",
+            operation=CommandOperation.COMPLETE_WORKOUT,
             request_hash=command.request_hash,
             resource_id=command.workout_id,
         )
         async with self._uow_factory() as uow:
-            replay = await _claim_or_replay(
+            replay = await claim_or_replay(
                 uow,
                 processed,
                 lambda resource_id: uow.workouts.get_by_id(resource_id, command.user_id),

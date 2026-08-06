@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 
 class BackendError(RuntimeError):
-    """Raised when registration cannot be completed or validated."""
+    """Raised when a backend request cannot be completed or validated."""
 
     def __init__(self, message: str, *, code: str | None = None) -> None:
         super().__init__(message)
@@ -213,6 +213,37 @@ class BackendClient:
             transport=transport,
         )
 
+    async def _post_json(
+        self,
+        path: str,
+        *,
+        payload: dict[str, Any],
+        failure_message: str,
+        rejected_message: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[httpx.Response, object]:
+        try:
+            async with asyncio.timeout(12.0):
+                response = await self._client.post(path, json=payload, headers=headers)
+        except (httpx.HTTPError, TimeoutError) as error:
+            raise BackendError(failure_message) from error
+
+        if rejected_message is None:
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as error:
+                raise BackendError(failure_message) from error
+
+        try:
+            body = response.json()
+        except ValueError as error:
+            raise BackendError(failure_message) from error
+        if response.is_error and rejected_message is not None:
+            detail = body.get("detail", {})
+            code = detail.get("code") if isinstance(detail, dict) else None
+            raise BackendError(rejected_message, code=code)
+        return response, body
+
     async def register_telegram_user(
         self,
         *,
@@ -225,16 +256,15 @@ class BackendClient:
             "username": username,
             "display_name": display_name,
         }
+        response, body = await self._post_json(
+            "/internal/identities/telegram",
+            payload=payload,
+            failure_message="Backend registration failed",
+        )
         try:
-            async with asyncio.timeout(12.0):
-                response = await self._client.post(
-                    "/internal/identities/telegram", json=payload
-                )
-            response.raise_for_status()
-            parsed = _RegistrationResponse.model_validate(response.json())
-        except (httpx.HTTPError, TimeoutError, ValidationError, ValueError) as error:
+            parsed = _RegistrationResponse.model_validate(body)
+        except ValidationError as error:
             raise BackendError("Backend registration failed") from error
-
         if response.status_code not in (200, 201):
             raise BackendError("Backend returned an unexpected registration status")
         return RegistrationResult(
@@ -256,21 +286,16 @@ class BackendClient:
             "action": action,
             "text": text,
         }
+        _, body = await self._post_json(
+            "/internal/workout-events",
+            payload=payload,
+            headers={"Idempotency-Key": f"telegram:update:{update_id}"},
+            failure_message="Backend workout event failed",
+            rejected_message="Backend rejected workout event",
+        )
         try:
-            async with asyncio.timeout(12.0):
-                response = await self._client.post(
-                    "/internal/workout-events",
-                    json=payload,
-                    headers={"Idempotency-Key": f"telegram:update:{update_id}"},
-                )
-            if response.is_error:
-                detail = response.json().get("detail", {})
-                code = detail.get("code") if isinstance(detail, dict) else None
-                raise BackendError("Backend rejected workout event", code=code)
-            parsed = _WorkoutEventResponse.model_validate(response.json())
-        except BackendError:
-            raise
-        except (httpx.HTTPError, TimeoutError, ValidationError, ValueError) as error:
+            parsed = _WorkoutEventResponse.model_validate(body)
+        except ValidationError as error:
             raise BackendError("Backend workout event failed") from error
 
         added = tuple(_exercise_summary(item) for item in parsed.added_exercises)
@@ -298,20 +323,15 @@ class BackendClient:
             "provider": "telegram",
             "provider_subject": str(telegram_user_id),
         }
+        _, body = await self._post_json(
+            "/internal/workout-status",
+            payload=payload,
+            failure_message="Backend workout status failed",
+            rejected_message="Backend rejected workout status",
+        )
         try:
-            async with asyncio.timeout(12.0):
-                response = await self._client.post(
-                    "/internal/workout-status",
-                    json=payload,
-                )
-            if response.is_error:
-                detail = response.json().get("detail", {})
-                code = detail.get("code") if isinstance(detail, dict) else None
-                raise BackendError("Backend rejected workout status", code=code)
-            parsed = _workout_status_adapter.validate_python(response.json())
-        except BackendError:
-            raise
-        except (httpx.HTTPError, TimeoutError, ValidationError, ValueError) as error:
+            parsed = _workout_status_adapter.validate_python(body)
+        except ValidationError as error:
             raise BackendError("Backend workout status failed") from error
 
         if isinstance(parsed, _NoActiveWorkoutStatusResponse):
@@ -344,20 +364,15 @@ class BackendClient:
         }
         if query is None:
             payload.pop("query")
+        _, body = await self._post_json(
+            "/internal/history-queries",
+            payload=payload,
+            failure_message="Backend history query failed",
+            rejected_message="Backend rejected history query",
+        )
         try:
-            async with asyncio.timeout(12.0):
-                response = await self._client.post(
-                    "/internal/history-queries",
-                    json=payload,
-                )
-            if response.is_error:
-                detail = response.json().get("detail", {})
-                code = detail.get("code") if isinstance(detail, dict) else None
-                raise BackendError("Backend rejected history query", code=code)
-            parsed = _history_query_adapter.validate_python(response.json())
-        except BackendError:
-            raise
-        except (httpx.HTTPError, TimeoutError, ValidationError, ValueError) as error:
+            parsed = _history_query_adapter.validate_python(body)
+        except ValidationError as error:
             raise BackendError("Backend history query failed") from error
 
         if isinstance(parsed, _WorkoutHistoryQueryResponse):

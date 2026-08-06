@@ -4,6 +4,8 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from pydantic import ValidationError
+
 from app.backend import BackendClient, BackendError
 
 
@@ -50,25 +52,31 @@ async def test_registration_contract(status_code: int, created: bool) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "handler",
+    ("handler", "cause_type"),
     [
-        lambda request: httpx.Response(503),
-        lambda request: httpx.Response(200, json={"unexpected": "body"}),
+        (lambda request: httpx.Response(503), httpx.HTTPStatusError),
+        (
+            lambda request: httpx.Response(200, json={"unexpected": "body"}),
+            ValidationError,
+        ),
     ],
 )
-async def test_registration_rejects_backend_and_protocol_errors(handler) -> None:
+async def test_registration_rejects_backend_and_protocol_errors(
+    handler, cause_type
+) -> None:
     client = BackendClient(
         base_url="http://api:8000",
         internal_api_token="internal-secret",
         transport=httpx.MockTransport(handler),
     )
     try:
-        with pytest.raises(BackendError):
+        with pytest.raises(BackendError) as captured:
             await client.register_telegram_user(
                 telegram_user_id=12345,
                 username=None,
                 display_name=None,
             )
+        assert isinstance(captured.value.__cause__, cause_type)
     finally:
         await client.close()
 
@@ -116,7 +124,7 @@ async def test_process_workout_event_sends_identity_idempotency_and_parses_summa
             ],
         }
         return httpx.Response(
-            200,
+            201,
             json={
                 "kind": "logged",
                 "replayed": False,
@@ -149,6 +157,39 @@ async def test_process_workout_event_sends_identity_idempotency_and_parses_summa
     assert result.exercises[0].sets[0].load_value == Decimal("80.000")
     assert result.total_exercises == 1
     assert result.total_sets == 1
+
+
+@pytest.mark.asyncio
+async def test_backend_requests_use_a_total_twelve_second_deadline(monkeypatch) -> None:
+    deadlines: list[float] = []
+
+    class RecordingTimeout:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+            return None
+
+    def record_timeout(seconds: float) -> RecordingTimeout:
+        deadlines.append(seconds)
+        return RecordingTimeout()
+
+    monkeypatch.setattr("app.backend.asyncio.timeout", record_timeout)
+    client = BackendClient(
+        base_url="http://backend",
+        internal_api_token="secret",
+        transport=httpx.MockTransport(lambda request: _response(200)),
+    )
+    try:
+        await client.register_telegram_user(
+            telegram_user_id=12345,
+            username=None,
+            display_name=None,
+        )
+    finally:
+        await client.close()
+
+    assert deadlines == [12.0]
 
 
 @pytest.mark.asyncio

@@ -1,18 +1,15 @@
 """Internal endpoint for provider-neutral chat workout events."""
 
-import hashlib
-import json
-
 from fastapi import APIRouter, Depends
 
 from app.api.auth import require_internal_token
 from app.api.dependencies import UowFactory, WorkoutInterpreter
+from app.api.idempotency import IdempotencyKey, hash_canonical_json
 from app.api.schemas import (
     WorkoutEventRequest,
     WorkoutEventResponse,
     workout_event_response,
 )
-from app.api.workouts import IdempotencyKey
 from app.application.commands import ProcessWorkoutEventCommand
 from app.application.workout_events import ProcessWorkoutEvent
 
@@ -25,13 +22,9 @@ router = APIRouter(
 
 
 def _request_hash(request: WorkoutEventRequest) -> str:
-    canonical = json.dumps(
-        request.model_dump(mode="json", exclude_none=False),
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
+    return hash_canonical_json(
+        request.model_dump(mode="json", exclude_none=False)
     )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 @router.post("", response_model=WorkoutEventResponse)

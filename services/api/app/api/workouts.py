@@ -1,14 +1,13 @@
 """Internal HTTP endpoints for the incremental workout lifecycle."""
 
-import hashlib
-import json
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.api.auth import require_internal_token
 from app.api.dependencies import UowFactory
+from app.api.idempotency import IdempotencyKey, request_hash
 from app.api.schemas import (
     AddExerciseRequest,
     CreateWorkoutRequest,
@@ -38,35 +37,6 @@ router = APIRouter(
 )
 
 
-def _request_hash(operation: str, path_values: dict[str, UUID], payload: object) -> str:
-    if hasattr(payload, "model_dump"):
-        body = payload.model_dump(mode="json", exclude_none=False)  # type: ignore[attr-defined]
-    else:
-        body = payload
-    canonical = json.dumps(
-        {"operation": operation, "path": {key: str(value) for key, value in path_values.items()}, "body": body},
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def _idempotency_key(
-    value: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=255)],
-) -> str:
-    value = value.strip()
-    if not value:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "invalid_idempotency_key", "message": "Idempotency-Key must not be blank"},
-        )
-    return value
-
-
-IdempotencyKey = Annotated[str, Depends(_idempotency_key)]
-
-
 @router.get("", response_model=WorkoutHistoryPageResponse)
 async def list_workout_history(
     user_id: UUID,
@@ -94,7 +64,7 @@ async def create_workout(
         CreateWorkoutCommand(
             user_id=user_id,
             idempotency_key=idempotency_key,
-            request_hash=_request_hash("create_workout", {"user_id": user_id}, request),
+            request_hash=request_hash("create_workout", {"user_id": user_id}, request),
             performed_on=request.performed_on,
             notes=request.notes,
         )
@@ -122,7 +92,7 @@ async def add_exercise(
             user_id=user_id,
             workout_id=workout_id,
             idempotency_key=idempotency_key,
-            request_hash=_request_hash(
+            request_hash=request_hash(
                 "add_workout_exercise",
                 {"user_id": user_id, "workout_id": workout_id},
                 request,
@@ -149,7 +119,7 @@ async def complete_workout(
             user_id=user_id,
             workout_id=workout_id,
             idempotency_key=idempotency_key,
-            request_hash=_request_hash(
+            request_hash=request_hash(
                 "complete_workout",
                 {"user_id": user_id, "workout_id": workout_id},
                 {},
