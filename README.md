@@ -131,28 +131,6 @@ An active workout remains a draft and is excluded from history until `/end` comp
 
 Workout text can contain multiple exercises. Compact notation such as `70x10x3` is expanded to three sets of 10 reps at 70 kg. Ambiguous input produces a clarification request instead of a database write.
 
-## Configuration
-
-All runtime settings are read from environment variables. Defaults are documented in [`.env.example`](.env.example).
-
-| Variable | Description | Default |
-| --- | --- | --- |
-| `APP_ENV` | Runtime environment name | `development` |
-| `LOG_LEVEL` | Application log level | `INFO` |
-| `API_PORT` | Host port exposed by the API | `8000` |
-| `POSTGRES_DB` | PostgreSQL database | `jim007` |
-| `POSTGRES_USER` | PostgreSQL user | `jim007` |
-| `POSTGRES_PASSWORD` | PostgreSQL password | required |
-| `INTERNAL_API_TOKEN` | Shared token used by the bot to call internal endpoints | required |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token | required |
-| `TELEGRAM_MODE` | Telegram update mode | `polling` |
-| `LLM_PROVIDER` | LLM adapter; currently only `gemini` is supported | `gemini` |
-| `LLM_MODEL` | Gemini model name | `gemini-3.5-flash-lite` |
-| `GEMINI_API_KEY` | Gemini Developer API key | required |
-| `LLM_TIMEOUT_SECONDS` | LLM request timeout | `8` |
-| `LLM_MAX_OUTPUT_TOKENS` | Maximum structured-output token count | `4096` |
-| `LLM_THINKING_LEVEL` | Gemini thinking level | `minimal` |
-
 ## Development and tests
 
 Each service has its own package metadata and test suite. Create separate virtual environments to avoid coupling their dependencies.
