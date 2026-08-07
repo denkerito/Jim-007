@@ -1,0 +1,45 @@
+name: Internal API contract
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  provider-contract:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api
+    env:
+      APP_ENV: contract
+      DATABASE_URL: postgresql+asyncpg://contract:contract@127.0.0.1:1/contract
+      INTERNAL_API_TOKEN: contract-secret
+      GEMINI_API_KEY: contract-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: services/api/pyproject.toml
+      - run: python -m pip install ".[test]"
+      - run: pytest -m contract
+
+  consumer-contract:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/telegram-bot
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: services/telegram-bot/pyproject.toml
+      - run: python -m pip install ".[test]"
+      - run: pytest -m contract

@@ -507,6 +507,11 @@ class BackendClient:
                         exercises=tuple(
                             _exercise_summary(exercise) for exercise in item.exercises
                         ),
+                        program_workout=(
+                            _program_summary(item.program_workout)
+                            if item.program_workout is not None
+                            else None
+                        ),
                     )
                     for item in parsed.items
                 ),

@@ -1,0 +1,434 @@
+{
+  "version": 1,
+  "fixtures": {
+    "registration": {
+      "user_id": "00000000-0000-0000-0000-000000000001",
+      "locale": "it-IT",
+      "timezone": "Europe/Rome",
+      "preferred_load_unit": "kg"
+    },
+    "exercise": {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "name": "Bench Press",
+      "normalized_name": "bench press"
+    },
+    "workout_exercise": {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "exercise": {"$fixture": "exercise"},
+      "position": 1,
+      "notes": "Pausa al petto",
+      "sets": [
+        {
+          "id": "00000000-0000-0000-0000-000000000004",
+          "set_number": 1,
+          "repetitions": 8,
+          "load": {"value": "80.000", "unit": "kg", "kilograms": "80.000000"},
+          "notes": "RPE 8"
+        }
+      ]
+    },
+    "program": {
+      "id": "00000000-0000-0000-0000-000000000005",
+      "day_number": 1,
+      "alias": "push",
+      "notes": "Upper body",
+      "active": true,
+      "items": [
+        {
+          "id": "00000000-0000-0000-0000-000000000006",
+          "position": 1,
+          "exercise_name": "Bench Press",
+          "exercise_id": "00000000-0000-0000-0000-000000000002",
+          "target_sets": 3,
+          "target_repetitions": 8,
+          "rest_seconds": 120
+        }
+      ]
+    },
+    "workout": {
+      "id": "00000000-0000-0000-0000-000000000007",
+      "user_id": "00000000-0000-0000-0000-000000000001",
+      "performed_on": "2026-08-07",
+      "status": "draft",
+      "notes": "Push day",
+      "created_at": "2026-08-07T08:00:00Z",
+      "completed_at": null,
+      "program_workout": {"$fixture": "program"},
+      "exercises": [{"$fixture": "workout_exercise"}]
+    },
+    "workout_opened": {
+      "kind": "opened",
+      "replayed": false,
+      "workout": {"$fixture": "workout"},
+      "added_exercises": [],
+      "removed_exercises": [],
+      "clarification_message": null,
+      "program_history": [
+        {
+          "item": {
+            "id": "00000000-0000-0000-0000-000000000006",
+            "position": 1,
+            "exercise_name": "Bench Press",
+            "exercise_id": "00000000-0000-0000-0000-000000000002",
+            "target_sets": 3,
+            "target_repetitions": 8,
+            "rest_seconds": 120
+          },
+          "latest_performed_on": "2026-08-01",
+          "latest_workout_notes": "Previous push day",
+          "latest_occurrences": [{"$fixture": "workout_exercise"}]
+        }
+      ]
+    },
+    "workout_logged": {
+      "kind": "logged",
+      "replayed": false,
+      "workout": {"$fixture": "workout"},
+      "added_exercises": [{"$fixture": "workout_exercise"}],
+      "removed_exercises": [],
+      "clarification_message": null,
+      "program_history": []
+    },
+    "workout_completed": {
+      "kind": "completed",
+      "replayed": false,
+      "workout": {"$fixture": "workout"},
+      "added_exercises": [],
+      "removed_exercises": [],
+      "clarification_message": null,
+      "program_history": []
+    },
+    "workout_cancelled": {
+      "kind": "cancelled",
+      "replayed": false,
+      "workout": null,
+      "added_exercises": [],
+      "removed_exercises": [],
+      "clarification_message": null,
+      "program_history": []
+    },
+    "workout_undone": {
+      "kind": "undone",
+      "replayed": false,
+      "workout": {"$fixture": "workout"},
+      "added_exercises": [],
+      "removed_exercises": [{"$fixture": "workout_exercise"}],
+      "clarification_message": null,
+      "program_history": []
+    },
+    "workout_clarification": {
+      "kind": "needs_clarification",
+      "replayed": false,
+      "workout": null,
+      "added_exercises": [],
+      "removed_exercises": [],
+      "clarification_message": "Quale esercizio intendi?",
+      "program_history": []
+    },
+    "program_reset": {
+      "kind": "reset",
+      "replayed": false,
+      "deactivated_count": 2,
+      "program_workout": null,
+      "clarification_message": null
+    },
+    "program_created": {
+      "kind": "created",
+      "replayed": false,
+      "deactivated_count": 0,
+      "program_workout": {"$fixture": "program"},
+      "clarification_message": null
+    },
+    "program_edited": {
+      "kind": "edited",
+      "replayed": false,
+      "deactivated_count": 0,
+      "program_workout": {"$fixture": "program"},
+      "clarification_message": null
+    },
+    "program_clarification": {
+      "kind": "needs_clarification",
+      "replayed": false,
+      "deactivated_count": 0,
+      "program_workout": null,
+      "clarification_message": "Specifica serie e ripetizioni."
+    },
+    "status_none": {"kind": "none"},
+    "status_active": {"kind": "active", "workout": {"$fixture": "workout"}},
+    "history_workouts": {
+      "kind": "workouts",
+      "items": [{"$fixture": "workout"}],
+      "next_cursor": null
+    },
+    "history_exercise": {
+      "kind": "exercise",
+      "exercise": {"$fixture": "exercise"},
+      "items": [
+        {
+          "workout_id": "00000000-0000-0000-0000-000000000007",
+          "performed_on": "2026-08-07",
+          "workout_notes": "Push day",
+          "occurrences": [{"$fixture": "workout_exercise"}]
+        }
+      ],
+      "next_cursor": null
+    },
+    "history_not_found": {"kind": "exercise_not_found"},
+    "history_clarification": {
+      "kind": "needs_clarification",
+      "clarification_message": "Quale variante di panca intendi?"
+    },
+    "application_error": {
+      "detail": {"code": "external_identity_not_registered", "message": "Register first"}
+    }
+  },
+  "interactions": [
+    {
+      "id": "registration-created",
+      "operation": "registration",
+      "arguments": {"telegram_user_id": 12345, "username": "jim", "display_name": "Jim"},
+      "request": {
+        "path": "/internal/identities/telegram",
+        "body": {"telegram_user_id": 12345, "username": "jim", "display_name": "Jim"},
+        "idempotency_key": null
+      },
+      "status": 201,
+      "response": {"$fixture": "registration"},
+      "expected_kind": "created"
+    },
+    {
+      "id": "registration-existing",
+      "operation": "registration",
+      "arguments": {"telegram_user_id": 12345, "username": null, "display_name": null},
+      "request": {
+        "path": "/internal/identities/telegram",
+        "body": {"telegram_user_id": 12345, "username": null, "display_name": null},
+        "idempotency_key": null
+      },
+      "status": 200,
+      "response": {"$fixture": "registration"},
+      "expected_kind": "existing"
+    },
+    {
+      "id": "workout-opened",
+      "operation": "workout_event",
+      "arguments": {"telegram_user_id": 12345, "update_id": 101, "action": "open", "text": "oggi"},
+      "request": {
+        "path": "/internal/workout-events",
+        "body": {"provider": "telegram", "provider_subject": "12345", "action": "open", "text": "oggi"},
+        "idempotency_key": "telegram:update:101"
+      },
+      "status": 200,
+      "response": {"$fixture": "workout_opened"},
+      "expected_kind": "opened"
+    },
+    {
+      "id": "workout-logged",
+      "operation": "workout_event",
+      "arguments": {"telegram_user_id": 12345, "update_id": 102, "action": "log", "text": "panca 80x8"},
+      "request": {
+        "path": "/internal/workout-events",
+        "body": {"provider": "telegram", "provider_subject": "12345", "action": "log", "text": "panca 80x8"},
+        "idempotency_key": "telegram:update:102"
+      },
+      "status": 200,
+      "response": {"$fixture": "workout_logged"},
+      "expected_kind": "logged"
+    },
+    {
+      "id": "workout-completed",
+      "operation": "workout_event",
+      "arguments": {"telegram_user_id": 12345, "update_id": 103, "action": "complete", "text": null},
+      "request": {
+        "path": "/internal/workout-events",
+        "body": {"provider": "telegram", "provider_subject": "12345", "action": "complete", "text": null},
+        "idempotency_key": "telegram:update:103"
+      },
+      "status": 200,
+      "response": {"$fixture": "workout_completed"},
+      "expected_kind": "completed"
+    },
+    {
+      "id": "workout-cancelled",
+      "operation": "workout_event",
+      "arguments": {"telegram_user_id": 12345, "update_id": 104, "action": "cancel", "text": null},
+      "request": {
+        "path": "/internal/workout-events",
+        "body": {"provider": "telegram", "provider_subject": "12345", "action": "cancel", "text": null},
+        "idempotency_key": "telegram:update:104"
+      },
+      "status": 200,
+      "response": {"$fixture": "workout_cancelled"},
+      "expected_kind": "cancelled"
+    },
+    {
+      "id": "workout-undone",
+      "operation": "workout_event",
+      "arguments": {"telegram_user_id": 12345, "update_id": 105, "action": "undo", "text": null},
+      "request": {
+        "path": "/internal/workout-events",
+        "body": {"provider": "telegram", "provider_subject": "12345", "action": "undo", "text": null},
+        "idempotency_key": "telegram:update:105"
+      },
+      "status": 200,
+      "response": {"$fixture": "workout_undone"},
+      "expected_kind": "undone"
+    },
+    {
+      "id": "workout-needs-clarification",
+      "operation": "workout_event",
+      "arguments": {"telegram_user_id": 12345, "update_id": 106, "action": "log", "text": "panca"},
+      "request": {
+        "path": "/internal/workout-events",
+        "body": {"provider": "telegram", "provider_subject": "12345", "action": "log", "text": "panca"},
+        "idempotency_key": "telegram:update:106"
+      },
+      "status": 200,
+      "response": {"$fixture": "workout_clarification"},
+      "expected_kind": "needs_clarification"
+    },
+    {
+      "id": "program-reset",
+      "operation": "program_event",
+      "arguments": {"telegram_user_id": 12345, "update_id": 201, "action": "new"},
+      "request": {
+        "path": "/internal/program-events",
+        "body": {"provider": "telegram", "provider_subject": "12345", "action": "new"},
+        "idempotency_key": "telegram:update:201"
+      },
+      "status": 200,
+      "response": {"$fixture": "program_reset"},
+      "expected_kind": "reset"
+    },
+    {
+      "id": "program-created",
+      "operation": "program_event",
+      "arguments": {"telegram_user_id": 12345, "update_id": 202, "action": "create", "day_number": 1, "alias": "push", "text": "panca 3x8", "notes": "Upper body"},
+      "request": {
+        "path": "/internal/program-events",
+        "body": {"provider": "telegram", "provider_subject": "12345", "action": "create", "day_number": 1, "alias": "push", "text": "panca 3x8", "notes": "Upper body"},
+        "idempotency_key": "telegram:update:202"
+      },
+      "status": 200,
+      "response": {"$fixture": "program_created"},
+      "expected_kind": "created"
+    },
+    {
+      "id": "program-edited",
+      "operation": "program_event",
+      "arguments": {"telegram_user_id": 12345, "update_id": 203, "action": "edit", "selector": "push", "text": "panca 4x8"},
+      "request": {
+        "path": "/internal/program-events",
+        "body": {"provider": "telegram", "provider_subject": "12345", "action": "edit", "selector": "push", "text": "panca 4x8"},
+        "idempotency_key": "telegram:update:203"
+      },
+      "status": 200,
+      "response": {"$fixture": "program_edited"},
+      "expected_kind": "edited"
+    },
+    {
+      "id": "program-needs-clarification",
+      "operation": "program_event",
+      "arguments": {"telegram_user_id": 12345, "update_id": 204, "action": "create", "day_number": 1, "alias": "push", "text": "panca"},
+      "request": {
+        "path": "/internal/program-events",
+        "body": {"provider": "telegram", "provider_subject": "12345", "action": "create", "day_number": 1, "alias": "push", "text": "panca"},
+        "idempotency_key": "telegram:update:204"
+      },
+      "status": 200,
+      "response": {"$fixture": "program_clarification"},
+      "expected_kind": "needs_clarification"
+    },
+    {
+      "id": "status-none",
+      "operation": "status",
+      "arguments": {"telegram_user_id": 12345},
+      "request": {
+        "path": "/internal/workout-status",
+        "body": {"provider": "telegram", "provider_subject": "12345"},
+        "idempotency_key": null
+      },
+      "status": 200,
+      "response": {"$fixture": "status_none"},
+      "expected_kind": "none"
+    },
+    {
+      "id": "status-active",
+      "operation": "status",
+      "arguments": {"telegram_user_id": 12345},
+      "request": {
+        "path": "/internal/workout-status",
+        "body": {"provider": "telegram", "provider_subject": "12345"},
+        "idempotency_key": null
+      },
+      "status": 200,
+      "response": {"$fixture": "status_active"},
+      "expected_kind": "active"
+    },
+    {
+      "id": "history-workouts",
+      "operation": "history",
+      "arguments": {"telegram_user_id": 12345, "kind": "workouts", "query": null, "limit": 5},
+      "request": {
+        "path": "/internal/history-queries",
+        "body": {"provider": "telegram", "provider_subject": "12345", "kind": "workouts", "limit": 5},
+        "idempotency_key": null
+      },
+      "status": 200,
+      "response": {"$fixture": "history_workouts"},
+      "expected_kind": "workouts"
+    },
+    {
+      "id": "history-exercise",
+      "operation": "history",
+      "arguments": {"telegram_user_id": 12345, "kind": "exercise", "query": "panca", "limit": 5},
+      "request": {
+        "path": "/internal/history-queries",
+        "body": {"provider": "telegram", "provider_subject": "12345", "kind": "exercise", "query": "panca", "limit": 5},
+        "idempotency_key": null
+      },
+      "status": 200,
+      "response": {"$fixture": "history_exercise"},
+      "expected_kind": "exercise"
+    },
+    {
+      "id": "history-exercise-not-found",
+      "operation": "history",
+      "arguments": {"telegram_user_id": 12345, "kind": "exercise", "query": "unknown", "limit": 5},
+      "request": {
+        "path": "/internal/history-queries",
+        "body": {"provider": "telegram", "provider_subject": "12345", "kind": "exercise", "query": "unknown", "limit": 5},
+        "idempotency_key": null
+      },
+      "status": 200,
+      "response": {"$fixture": "history_not_found"},
+      "expected_kind": "exercise_not_found"
+    },
+    {
+      "id": "history-needs-clarification",
+      "operation": "history",
+      "arguments": {"telegram_user_id": 12345, "kind": "exercise", "query": "panca", "limit": 5},
+      "request": {
+        "path": "/internal/history-queries",
+        "body": {"provider": "telegram", "provider_subject": "12345", "kind": "exercise", "query": "panca", "limit": 5},
+        "idempotency_key": null
+      },
+      "status": 200,
+      "response": {"$fixture": "history_clarification"},
+      "expected_kind": "needs_clarification"
+    },
+    {
+      "id": "workout-error-code",
+      "operation": "workout_event",
+      "arguments": {"telegram_user_id": 12345, "update_id": 301, "action": "log", "text": "panca 80x8"},
+      "request": {
+        "path": "/internal/workout-events",
+        "body": {"provider": "telegram", "provider_subject": "12345", "action": "log", "text": "panca 80x8"},
+        "idempotency_key": "telegram:update:301"
+      },
+      "status": 404,
+      "response": {"$fixture": "application_error"},
+      "expected_error_code": "external_identity_not_registered"
+    }
+  ]
+}

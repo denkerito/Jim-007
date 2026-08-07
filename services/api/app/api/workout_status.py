@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from app.api.auth import require_internal_token
 from app.api.dependencies import UowFactory
 from app.api.schemas import (
+    INTERNAL_APPLICATION_ERROR_RESPONSES,
     WorkoutStatusRequest,
     WorkoutStatusResponse,
     workout_status_response,
@@ -20,7 +21,11 @@ router = APIRouter(
 )
 
 
-@router.post("", response_model=WorkoutStatusResponse)
+@router.post(
+    "",
+    response_model=WorkoutStatusResponse,
+    responses=INTERNAL_APPLICATION_ERROR_RESPONSES,
+)
 async def get_workout_status(
     request: WorkoutStatusRequest,
     uow_factory: UowFactory,

@@ -25,6 +25,34 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ApiErrorDetail(ApiModel):
+    code: str
+    message: str
+    workout_id: UUID | None = None
+
+
+class ApiErrorResponse(ApiModel):
+    detail: ApiErrorDetail
+
+
+INTERNAL_AUTH_ERROR_RESPONSES = {
+    401: {"model": ApiErrorResponse, "description": "Invalid internal credentials."},
+}
+
+INTERNAL_APPLICATION_ERROR_RESPONSES = {
+    **INTERNAL_AUTH_ERROR_RESPONSES,
+    404: {"model": ApiErrorResponse, "description": "Application resource not found."},
+    409: {"model": ApiErrorResponse, "description": "Application state conflict."},
+}
+
+INTERNAL_LLM_ERROR_RESPONSES = {
+    **INTERNAL_APPLICATION_ERROR_RESPONSES,
+    502: {"model": ApiErrorResponse, "description": "The LLM returned an invalid response."},
+    503: {"model": ApiErrorResponse, "description": "The LLM provider is unavailable."},
+    504: {"model": ApiErrorResponse, "description": "The LLM request timed out."},
+}
+
+
 class TelegramRegistrationRequest(ApiModel):
     telegram_user_id: int = Field(gt=0, le=9_223_372_036_854_775_807)
     username: str | None = Field(default=None, max_length=255)

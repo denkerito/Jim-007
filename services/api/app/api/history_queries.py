@@ -7,6 +7,7 @@ from app.api.dependencies import ExerciseHistoryInterpreter, UowFactory
 from app.api.schemas import (
     HistoryQueryRequest,
     HistoryQueryResponse,
+    INTERNAL_LLM_ERROR_RESPONSES,
     history_query_response,
 )
 from app.application.commands import ProcessHistoryQueryCommand
@@ -19,7 +20,11 @@ router = APIRouter(
 )
 
 
-@router.post("", response_model=HistoryQueryResponse)
+@router.post(
+    "",
+    response_model=HistoryQueryResponse,
+    responses=INTERNAL_LLM_ERROR_RESPONSES,
+)
 async def process_history_query(
     request: HistoryQueryRequest,
     uow_factory: UowFactory,

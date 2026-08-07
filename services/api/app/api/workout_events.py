@@ -6,6 +6,7 @@ from app.api.auth import require_internal_token
 from app.api.dependencies import UowFactory, WorkoutInterpreter
 from app.api.idempotency import IdempotencyKey, hash_canonical_json
 from app.api.schemas import (
+    INTERNAL_LLM_ERROR_RESPONSES,
     WorkoutEventRequest,
     WorkoutEventResponse,
     workout_event_response,
@@ -27,7 +28,11 @@ def _request_hash(request: WorkoutEventRequest) -> str:
     )
 
 
-@router.post("", response_model=WorkoutEventResponse)
+@router.post(
+    "",
+    response_model=WorkoutEventResponse,
+    responses=INTERNAL_LLM_ERROR_RESPONSES,
+)
 async def process_workout_event(
     request: WorkoutEventRequest,
     idempotency_key: IdempotencyKey,

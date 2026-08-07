@@ -97,3 +97,21 @@ FastAPI usa SQLAlchemy in modalita asincrona con `asyncpg`. I modelli ORM appart
 Le migrazioni sono gestite da Alembic attraverso il servizio one-shot `migrate`, costruito dalla stessa immagine dell'API. Dopo che PostgreSQL risulta sano, `migrate` esegue `alembic upgrade head`; FastAPI viene avviata soltanto se la migrazione termina con successo. Le migrazioni non vengono eseguite nello startup dell'API, evitando conflitti tra eventuali repliche in produzione.
 
 FastAPI espone una liveness probe indipendente dal database e una readiness probe che verifica PostgreSQL con una query reale.
+
+## Contratto API interno
+
+Il contratto HTTP consumato dal bot Telegram e versionato in
+`contracts/internal-api/v1`. Lo snapshot OpenAPI contiene soltanto i cinque endpoint
+interni usati dal bot, mentre il manifest delle interazioni contiene esempi validati
+sia dai modelli FastAPI sia dal client HTTP reale del bot.
+
+Una modifica intenzionale al contratto richiede la revisione del diff e la
+rigenerazione dalla directory `services/api`:
+
+```text
+python scripts/internal_api_contract.py --write
+```
+
+`--check` verifica lo snapshot senza modificarlo. I contract test dei due servizi
+sono eseguiti separatamente in CI con `pytest -m contract`, evitando dipendenze
+Python condivise fra API e bot.

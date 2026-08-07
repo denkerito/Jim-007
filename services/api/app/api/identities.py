@@ -4,7 +4,11 @@ from fastapi import APIRouter, Depends, Response, status
 
 from app.api.auth import require_internal_token
 from app.api.dependencies import UowFactory
-from app.api.schemas import TelegramRegistrationRequest, UserRegistrationResponse
+from app.api.schemas import (
+    INTERNAL_AUTH_ERROR_RESPONSES,
+    TelegramRegistrationRequest,
+    UserRegistrationResponse,
+)
 from app.application.commands import RegisterExternalIdentityCommand
 from app.application.services import RegisterExternalIdentity
 
@@ -21,6 +25,7 @@ router = APIRouter(
     response_model=UserRegistrationResponse,
     status_code=status.HTTP_201_CREATED,
     responses={
+        **INTERNAL_AUTH_ERROR_RESPONSES,
         status.HTTP_200_OK: {
             "model": UserRegistrationResponse,
             "description": "The Telegram identity was already registered.",
