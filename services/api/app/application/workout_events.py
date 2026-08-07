@@ -16,6 +16,9 @@ from app.application.commands import (
     WorkoutEventAction,
     WorkoutEventResult,
     WorkoutInterpretationContext,
+    ProgramWorkoutCatalogItem,
+    ProgramExerciseHistory,
+    ProgramExerciseResolutionInput,
 )
 from app.application.idempotency import CommandOperation, verify_replay
 from app.application.ports import ProcessedCommand, UnitOfWorkFactory, WorkoutTextInterpreter
@@ -31,8 +34,9 @@ from app.domain.exceptions import (
     ExternalIdentityNotRegisteredError,
     NoActiveWorkoutError,
     NotFoundError,
+    LlmInvalidResponseError,
 )
-from app.domain.models import Exercise, User, Workout
+from app.domain.models import Exercise, ProgramWorkout, User, Workout
 
 
 class ProcessWorkoutEvent:
@@ -100,6 +104,11 @@ class ProcessWorkoutEvent:
                 if command.action is WorkoutEventAction.LOG
                 else ()
             )
+            active_programs = (
+                await uow.program_workouts.list_active(user.id)
+                if command.action is WorkoutEventAction.OPEN
+                else ()
+            )
 
             if command.action is WorkoutEventAction.LOG:
                 if active is None:
@@ -112,7 +121,7 @@ class ProcessWorkoutEvent:
         )
 
         if command.action is WorkoutEventAction.OPEN:
-            return await self._open(command, user, active, context)
+            return await self._open(command, user, active, context, active_programs)
 
         if command.action is WorkoutEventAction.COMPLETE:
             if active is None:
@@ -170,25 +179,51 @@ class ProcessWorkoutEvent:
         user: User,
         active: Workout | None,
         context: WorkoutInterpretationContext,
+        active_programs,
     ) -> WorkoutEventResult:
         if active is not None:
             raise ActiveWorkoutExistsError(active.id)
         text = (command.text or "").strip()
         if text:
-            interpretation = await self._interpreter.interpret_date(
-                text=text,
-                context=context,
-            )
+            if hasattr(self._interpreter, "interpret_start"):
+                interpretation = await self._interpreter.interpret_start(
+                    text=text, context=context,
+                    programs=tuple(
+                        ProgramWorkoutCatalogItem(
+                            id=item.id, day_number=item.day_number, alias=item.alias
+                        ) for item in active_programs
+                    ),
+                )
+            else:  # Compatibility for provider adapters implementing the original port.
+                legacy = await self._interpreter.interpret_date(text=text, context=context)
+                interpretation = legacy
             if interpretation.status is InterpretationStatus.NEEDS_CLARIFICATION:
                 return WorkoutEventResult(
                     kind="needs_clarification",
                     clarification_message=interpretation.clarification_message,
                 )
-            performed_on = interpretation.performed_on
-            notes = interpretation.notes
+            if getattr(interpretation, "kind", "date") == "program":
+                program = next(
+                    (item for item in active_programs if item.id == interpretation.program_workout_id),
+                    None,
+                )
+                if program is None:
+                    raise NotFoundError("The interpreted programmed workout is not active")
+                performed_on = context.current_date
+                notes = program.notes
+            else:
+                program = None
+                performed_on = interpretation.performed_on
+                notes = interpretation.notes
         else:
+            program = None
             performed_on = context.current_date
             notes = None
+        program_history = (
+            await self._program_history(user, program)
+            if program is not None
+            else ()
+        )
         result = await CreateWorkout(self._uow_factory).execute(
             CreateWorkoutCommand(
                 user_id=user.id,
@@ -196,12 +231,53 @@ class ProcessWorkoutEvent:
                 request_hash=command.request_hash,
                 performed_on=performed_on,
                 notes=notes,
+                program_workout_id=program.id if program is not None else None,
             )
         )
         return WorkoutEventResult(
             kind="opened",
             workout=result.value,
             replayed=result.replayed,
+            program_history=program_history,
+        )
+
+    async def _program_history(
+        self, user: User, program: ProgramWorkout
+    ) -> tuple[ProgramExerciseHistory, ...]:
+        async with self._uow_factory() as uow:
+            catalog = await uow.exercises.list_for_user(user.id)
+        catalog_ids = {item.id for item in catalog}
+        by_name = {item.normalized_name: item.id for item in catalog}
+        resolved = {
+            item.id: item.exercise_id or by_name.get(item.normalized_exercise_name)
+            for item in program.items
+        }
+        unresolved = tuple(
+            ProgramExerciseResolutionInput(item_id=item.id, name=item.exercise_name)
+            for item in program.items
+            if resolved[item.id] is None
+        )
+        if unresolved and catalog and hasattr(self._interpreter, "resolve_program_exercises"):
+            llm_resolution = await self._interpreter.resolve_program_exercises(
+                items=unresolved, locale=user.locale,
+                catalog=tuple(ExerciseCatalogItem(id=item.id, name=item.name) for item in catalog),
+            )
+            expected_items = {item.item_id for item in unresolved}
+            returned_items = {item.item_id for item in llm_resolution.resolutions}
+            if returned_items != expected_items or any(
+                item.exercise_id is not None and item.exercise_id not in catalog_ids
+                for item in llm_resolution.resolutions
+            ):
+                raise LlmInvalidResponseError("LLM returned an invalid program exercise resolution")
+            resolved.update({item.item_id: item.exercise_id for item in llm_resolution.resolutions})
+        exercise_ids = tuple(dict.fromkeys(
+            exercise_id for exercise_id in resolved.values() if exercise_id is not None
+        ))
+        async with self._uow_factory() as uow:
+            latest = await uow.workouts.latest_completed_for_exercises(user.id, exercise_ids)
+        return tuple(
+            ProgramExerciseHistory(item=item, latest=latest.get(resolved[item.id]))
+            for item in program.items
         )
 
     async def _log(

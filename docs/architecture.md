@@ -41,6 +41,20 @@ l'identita esterna tramite `POST /internal/identities/telegram`. FastAPI usa la
 coppia stabile `(provider, provider_subject)` per collegarla a un utente applicativo
 e aggiorna soltanto i metadati descrittivi Telegram nelle registrazioni successive.
 
+Le giornate programmate sono gestite dai comandi `/program`, `/editprogram` e
+`/newprogram` tramite `POST /internal/program-events`. Una giornata contiene una
+prescrizione ordinata (esercizio, serie, ripetizioni e recupero), ma non crea record
+nel catalogo esercizi. Le modifiche producono una nuova versione e disattivano la
+precedente; `/newprogram` disattiva tutte le giornate correnti, rendendo nuovamente
+disponibili numeri e alias.
+
+Quando `/workout` riceve un argomento, l'interprete sceglie tramite structured
+output tra data e giornata attiva. Il backend valida l'ID restituito, apre il draft
+alla data locale corrente e collega la versione della giornata. La risposta include
+la prescrizione e l'ultima esecuzione completata di ogni esercizio, recuperata in
+batch indipendentemente dalla giornata in cui era stato eseguito. `/status` mantiene
+separati piano previsto e dati effettivamente registrati.
+
 Le letture Telegram usano `POST /internal/history-queries`, che risolve la stessa
 identita provider-neutral e delega ai casi d'uso read-only. `/history` non usa il
 provider LLM; `/exercise` evita la chiamata esterna per un nome normalizzato esatto

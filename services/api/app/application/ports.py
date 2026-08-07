@@ -16,6 +16,11 @@ from app.application.commands import (
     WorkoutDateInterpretation,
     WorkoutInterpretationContext,
     WorkoutLogInterpretation,
+    ProgramWorkoutCatalogItem,
+    ProgramWorkoutInterpretation,
+    WorkoutStartInterpretation,
+    ProgramExerciseResolution,
+    ProgramExerciseResolutionInput,
 )
 from app.domain.models import (
     Exercise,
@@ -25,6 +30,7 @@ from app.domain.models import (
     User,
     Workout,
     WorkoutExercise,
+    ProgramWorkout,
 )
 
 
@@ -101,6 +107,7 @@ class WorkoutRepository(Protocol):
         user_id: UUID,
         performed_on: date,
         notes: str | None,
+        program_workout_id: UUID | None = None,
     ) -> Workout: ...
 
     async def get_by_id(self, workout_id: UUID, user_id: UUID) -> Workout | None: ...
@@ -146,6 +153,24 @@ class WorkoutRepository(Protocol):
         after: HistoryCursor | None,
     ) -> tuple[ExerciseHistoryItem, ...]: ...
 
+    async def latest_completed_for_exercises(
+        self, user_id: UUID, exercise_ids: tuple[UUID, ...]
+    ) -> dict[UUID, ExerciseHistoryItem]: ...
+
+
+class ProgramWorkoutRepository(Protocol):
+    async def acquire_user_lock(self, user_id: UUID) -> None: ...
+    async def list_active(self, user_id: UUID) -> tuple[ProgramWorkout, ...]: ...
+    async def get_by_id(self, program_workout_id: UUID, user_id: UUID) -> ProgramWorkout | None: ...
+    async def get_active_by_selector(self, user_id: UUID, selector: str) -> ProgramWorkout | None: ...
+    async def deactivate_all(self, user_id: UUID) -> int: ...
+    async def deactivate(self, program_workout_id: UUID, user_id: UUID) -> None: ...
+    async def create(
+        self, *, program_workout_id: UUID, user_id: UUID, day_number: int,
+        alias: str, normalized_alias: str, notes: str | None,
+        items: tuple[tuple[UUID, str, str, UUID | None, int, int, int | None], ...],
+    ) -> ProgramWorkout: ...
+
 
 class ProcessedCommandRepository(Protocol):
     async def claim(self, command: ProcessedCommand) -> bool: ...
@@ -158,6 +183,7 @@ class UnitOfWork(Protocol):
     external_identities: ExternalIdentityRepository
     exercises: ExerciseRepository
     workouts: WorkoutRepository
+    program_workouts: ProgramWorkoutRepository
     processed_commands: ProcessedCommandRepository
 
     async def __aenter__(self) -> "UnitOfWork": ...
@@ -179,6 +205,21 @@ class WorkoutTextInterpreter(Protocol):
         text: str,
         context: WorkoutInterpretationContext,
     ) -> WorkoutDateInterpretation: ...
+
+    async def interpret_start(
+        self, *, text: str, context: WorkoutInterpretationContext,
+        programs: tuple[ProgramWorkoutCatalogItem, ...],
+    ) -> WorkoutStartInterpretation: ...
+
+    async def interpret_program(
+        self, *, text: str, context: WorkoutInterpretationContext,
+        catalog: tuple[ExerciseCatalogItem, ...],
+    ) -> ProgramWorkoutInterpretation: ...
+
+    async def resolve_program_exercises(
+        self, *, items: tuple[ProgramExerciseResolutionInput, ...],
+        locale: str, catalog: tuple[ExerciseCatalogItem, ...],
+    ) -> ProgramExerciseResolution: ...
 
     async def interpret_exercises(
         self,

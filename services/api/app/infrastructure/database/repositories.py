@@ -3,7 +3,7 @@
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, tuple_, update
+from sqlalchemy import delete, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -19,6 +19,7 @@ from app.domain.models import (
     User,
     Workout,
     WorkoutExercise,
+    ProgramWorkout,
 )
 from app.infrastructure.database import models as orm
 from app.infrastructure.database.mappers import (
@@ -27,14 +28,20 @@ from app.infrastructure.database.mappers import (
     to_user,
     to_workout,
     to_workout_exercise,
+    to_program_workout,
 )
 
 
 def _workout_options() -> tuple[object, ...]:
     return (
+        selectinload(orm.Workout.program_workout).selectinload(orm.ProgramWorkout.items),
         selectinload(orm.Workout.exercises).selectinload(orm.WorkoutExercise.exercise),
         selectinload(orm.Workout.exercises).selectinload(orm.WorkoutExercise.sets),
     )
+
+
+def _program_options() -> tuple[object, ...]:
+    return (selectinload(orm.ProgramWorkout.items),)
 
 
 def _exercise_history_options(exercise_id: UUID) -> tuple[object, ...]:
@@ -236,6 +243,7 @@ class SqlAlchemyWorkoutRepository:
         user_id: UUID,
         performed_on: date,
         notes: str | None,
+        program_workout_id: UUID | None = None,
     ) -> Workout:
         statement = (
             insert(orm.Workout)
@@ -244,6 +252,7 @@ class SqlAlchemyWorkoutRepository:
                 user_id=user_id,
                 performed_on=performed_on,
                 notes=notes,
+                program_workout_id=program_workout_id,
                 status="draft",
             )
             .on_conflict_do_nothing(
@@ -456,6 +465,149 @@ class SqlAlchemyWorkoutRepository:
             )
             for model in models
         )
+
+    async def latest_completed_for_exercises(
+        self, user_id: UUID, exercise_ids: tuple[UUID, ...]
+    ) -> dict[UUID, ExerciseHistoryItem]:
+        if not exercise_ids:
+            return {}
+        models = tuple(
+            await self._session.scalars(
+                select(orm.Workout)
+                .where(
+                    orm.Workout.user_id == user_id,
+                    orm.Workout.status == "completed",
+                    orm.Workout.exercises.any(
+                        orm.WorkoutExercise.exercise_id.in_(exercise_ids)
+                    ),
+                )
+                .options(*_workout_options())
+                .order_by(
+                    orm.Workout.performed_on.desc(),
+                    orm.Workout.created_at.desc(),
+                    orm.Workout.id.desc(),
+                )
+            )
+        )
+        result: dict[UUID, ExerciseHistoryItem] = {}
+        wanted = set(exercise_ids)
+        for model in models:
+            by_exercise: dict[UUID, list[WorkoutExercise]] = {}
+            for occurrence in model.exercises:
+                exercise_id = occurrence.exercise.id
+                if exercise_id in wanted and exercise_id not in result:
+                    by_exercise.setdefault(exercise_id, []).append(
+                        to_workout_exercise(occurrence)
+                    )
+            for exercise_id, occurrences in by_exercise.items():
+                result[exercise_id] = ExerciseHistoryItem(
+                    workout_id=model.id,
+                    performed_on=model.performed_on,
+                    workout_notes=model.notes,
+                    workout_created_at=model.created_at,
+                    occurrences=tuple(occurrences),
+                )
+            if len(result) == len(wanted):
+                break
+        return result
+
+
+class SqlAlchemyProgramWorkoutRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def acquire_user_lock(self, user_id: UUID) -> None:
+        await self._session.execute(
+            select(func.pg_advisory_xact_lock(func.hashtextextended(str(user_id), 17)))
+        )
+
+    async def _load(self, program_workout_id: UUID, user_id: UUID) -> orm.ProgramWorkout | None:
+        return await self._session.scalar(
+            select(orm.ProgramWorkout)
+            .where(orm.ProgramWorkout.id == program_workout_id, orm.ProgramWorkout.user_id == user_id)
+            .options(*_program_options())
+        )
+
+    async def list_active(self, user_id: UUID) -> tuple[ProgramWorkout, ...]:
+        models = await self._session.scalars(
+            select(orm.ProgramWorkout)
+            .where(orm.ProgramWorkout.user_id == user_id, orm.ProgramWorkout.deactivated_at.is_(None))
+            .options(*_program_options())
+            .order_by(orm.ProgramWorkout.day_number, orm.ProgramWorkout.created_at)
+        )
+        return tuple(to_program_workout(model) for model in models)
+
+    async def get_by_id(self, program_workout_id: UUID, user_id: UUID) -> ProgramWorkout | None:
+        model = await self._load(program_workout_id, user_id)
+        return to_program_workout(model) if model is not None else None
+
+    async def get_active_by_selector(self, user_id: UUID, selector: str) -> ProgramWorkout | None:
+        try:
+            number = int(selector)
+        except ValueError:
+            number = None
+        condition = (
+            orm.ProgramWorkout.day_number == number
+            if number is not None
+            else orm.ProgramWorkout.normalized_alias == selector
+        )
+        model = await self._session.scalar(
+            select(orm.ProgramWorkout)
+            .where(
+                orm.ProgramWorkout.user_id == user_id,
+                orm.ProgramWorkout.deactivated_at.is_(None),
+                condition,
+            )
+            .options(*_program_options())
+        )
+        return to_program_workout(model) if model is not None else None
+
+    async def deactivate_all(self, user_id: UUID) -> int:
+        result = await self._session.execute(
+            update(orm.ProgramWorkout)
+            .where(orm.ProgramWorkout.user_id == user_id, orm.ProgramWorkout.deactivated_at.is_(None))
+            .values(deactivated_at=func.now())
+        )
+        await self._session.flush()
+        return int(result.rowcount or 0)
+
+    async def deactivate(self, program_workout_id: UUID, user_id: UUID) -> None:
+        await self._session.execute(
+            update(orm.ProgramWorkout)
+            .where(
+                orm.ProgramWorkout.id == program_workout_id,
+                orm.ProgramWorkout.user_id == user_id,
+                orm.ProgramWorkout.deactivated_at.is_(None),
+            )
+            .values(deactivated_at=func.now())
+        )
+        await self._session.flush()
+
+    async def create(
+        self, *, program_workout_id: UUID, user_id: UUID, day_number: int,
+        alias: str, normalized_alias: str, notes: str | None,
+        items: tuple[tuple[UUID, str, str, UUID | None, int, int, int | None], ...],
+    ) -> ProgramWorkout:
+        model = orm.ProgramWorkout(
+            id=program_workout_id, user_id=user_id, day_number=day_number,
+            alias=alias, normalized_alias=normalized_alias, notes=notes,
+        )
+        model.items = [
+            orm.ProgramWorkoutItem(
+                id=item_id, user_id=user_id, position=position,
+                exercise_name=name, normalized_exercise_name=normalized_name,
+                exercise_id=exercise_id, target_sets=target_sets,
+                target_repetitions=target_repetitions, rest_seconds=rest_seconds,
+            )
+            for position, (item_id, name, normalized_name, exercise_id, target_sets, target_repetitions, rest_seconds)
+            in enumerate(items, start=1)
+        ]
+        self._session.add(model)
+        await self._session.flush()
+        loaded = await self._load(program_workout_id, user_id)
+        if loaded is None:
+            raise RuntimeError("Created program workout could not be loaded")
+        return to_program_workout(loaded)
 
 
 class SqlAlchemyProcessedCommandRepository:

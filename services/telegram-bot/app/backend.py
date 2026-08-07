@@ -56,10 +56,37 @@ class _WorkoutExerciseResponse(BaseModel):
     sets: tuple[_PerformedSetResponse, ...]
 
 
+class _ProgramWorkoutItemResponse(BaseModel):
+    id: UUID
+    position: int
+    exercise_name: str
+    exercise_id: UUID | None = None
+    target_sets: int
+    target_repetitions: int
+    rest_seconds: int | None = None
+
+
+class _ProgramWorkoutResponse(BaseModel):
+    id: UUID
+    day_number: int
+    alias: str
+    notes: str | None = None
+    active: bool = True
+    items: tuple[_ProgramWorkoutItemResponse, ...]
+
+
 class _WorkoutResponse(BaseModel):
     performed_on: date
     notes: str | None = None
     exercises: tuple[_WorkoutExerciseResponse, ...]
+    program_workout: _ProgramWorkoutResponse | None = None
+
+
+class _ProgramExerciseHistoryResponse(BaseModel):
+    item: _ProgramWorkoutItemResponse
+    latest_performed_on: date | None = None
+    latest_workout_notes: str | None = None
+    latest_occurrences: tuple[_WorkoutExerciseResponse, ...] = ()
 
 
 class _WorkoutEventResponse(BaseModel):
@@ -75,6 +102,15 @@ class _WorkoutEventResponse(BaseModel):
     workout: _WorkoutResponse | None = None
     added_exercises: tuple[_WorkoutExerciseResponse, ...] = ()
     removed_exercises: tuple[_WorkoutExerciseResponse, ...] = ()
+    clarification_message: str | None = None
+    program_history: tuple[_ProgramExerciseHistoryResponse, ...] = ()
+
+
+class _ProgramEventResponse(BaseModel):
+    kind: Literal["reset", "created", "edited", "needs_clarification"]
+    replayed: bool = False
+    deactivated_count: int = 0
+    program_workout: _ProgramWorkoutResponse | None = None
     clarification_message: str | None = None
 
 
@@ -146,6 +182,30 @@ class ExerciseSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class PlannedExerciseSummary:
+    name: str
+    target_sets: int
+    target_repetitions: int
+    rest_seconds: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramWorkoutSummary:
+    day_number: int
+    alias: str
+    notes: str | None
+    items: tuple[PlannedExerciseSummary, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PreviousExerciseSummary:
+    planned: PlannedExerciseSummary
+    performed_on: date | None = None
+    workout_notes: str | None = None
+    occurrences: tuple[ExerciseSummary, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class WorkoutEventResult:
     kind: Literal[
         "opened",
@@ -162,6 +222,17 @@ class WorkoutEventResult:
     total_sets: int
     clarification_message: str | None
     removed_exercises: tuple[ExerciseSummary, ...] = ()
+    program_workout: ProgramWorkoutSummary | None = None
+    program_history: tuple[PreviousExerciseSummary, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramEventResult:
+    kind: Literal["reset", "created", "edited", "needs_clarification"]
+    replayed: bool = False
+    deactivated_count: int = 0
+    program_workout: ProgramWorkoutSummary | None = None
+    clarification_message: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +240,7 @@ class WorkoutHistoryItem:
     performed_on: date
     notes: str | None
     exercises: tuple[ExerciseSummary, ...]
+    program_workout: ProgramWorkoutSummary | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,6 +384,52 @@ class BackendClient:
             total_exercises=len(workout_exercises),
             total_sets=sum(len(item.sets) for item in workout_exercises),
             clarification_message=parsed.clarification_message,
+            program_workout=(
+                _program_summary(parsed.workout.program_workout)
+                if parsed.workout is not None and parsed.workout.program_workout is not None
+                else None
+            ),
+            program_history=tuple(
+                PreviousExerciseSummary(
+                    planned=_planned_summary(item.item),
+                    performed_on=item.latest_performed_on,
+                    workout_notes=item.latest_workout_notes,
+                    occurrences=tuple(_exercise_summary(value) for value in item.latest_occurrences),
+                ) for item in parsed.program_history
+            ),
+        )
+
+    async def process_program_event(
+        self, *, telegram_user_id: int, update_id: int,
+        action: Literal["new", "create", "edit"],
+        day_number: int | None = None, alias: str | None = None,
+        selector: str | None = None, text: str | None = None,
+        notes: str | None = None,
+    ) -> ProgramEventResult:
+        payload: dict[str, Any] = {
+            "provider": "telegram", "provider_subject": str(telegram_user_id),
+            "action": action, "day_number": day_number, "alias": alias,
+            "selector": selector, "text": text, "notes": notes,
+        }
+        payload = {key: value for key, value in payload.items() if value is not None}
+        _, body = await self._post_json(
+            "/internal/program-events", payload=payload,
+            headers={"Idempotency-Key": f"telegram:update:{update_id}"},
+            failure_message="Backend program event failed",
+            rejected_message="Backend rejected program event",
+        )
+        try:
+            parsed = _ProgramEventResponse.model_validate(body)
+        except ValidationError as error:
+            raise BackendError("Backend program event failed") from error
+        return ProgramEventResult(
+            kind=parsed.kind, replayed=parsed.replayed,
+            deactivated_count=parsed.deactivated_count,
+            program_workout=(
+                _program_summary(parsed.program_workout)
+                if parsed.program_workout is not None else None
+            ),
+            clarification_message=parsed.clarification_message,
         )
 
     async def get_workout_status(
@@ -343,6 +461,10 @@ class BackendClient:
                 notes=parsed.workout.notes,
                 exercises=tuple(
                     _exercise_summary(item) for item in parsed.workout.exercises
+                ),
+                program_workout=(
+                    _program_summary(parsed.workout.program_workout)
+                    if parsed.workout.program_workout is not None else None
                 ),
             ),
         )
@@ -429,4 +551,19 @@ def _exercise_summary(value: _WorkoutExerciseResponse) -> ExerciseSummary:
             )
             for item in value.sets
         ),
+    )
+
+
+def _planned_summary(value: _ProgramWorkoutItemResponse) -> PlannedExerciseSummary:
+    return PlannedExerciseSummary(
+        name=value.exercise_name, target_sets=value.target_sets,
+        target_repetitions=value.target_repetitions,
+        rest_seconds=value.rest_seconds,
+    )
+
+
+def _program_summary(value: _ProgramWorkoutResponse) -> ProgramWorkoutSummary:
+    return ProgramWorkoutSummary(
+        day_number=value.day_number, alias=value.alias, notes=value.notes,
+        items=tuple(_planned_summary(item) for item in value.items),
     )

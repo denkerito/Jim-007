@@ -30,9 +30,13 @@ from app.handlers import (
     undo_workout,
     workout_status,
     workout_history,
+    create_program,
+    edit_program,
+    new_program,
 )
 from app.presentation import (
     _format_decimal,
+    _format_workout_result,
     _format_workout_status,
     _split_telegram_message,
 )
@@ -76,6 +80,7 @@ def _objects(*, chat_type=ChatType.PRIVATE, user=True):
         process_workout_event=AsyncMock(),
         get_workout_status=AsyncMock(),
         query_history=AsyncMock(),
+        process_program_event=AsyncMock(),
     )
     context = SimpleNamespace(
         application=SimpleNamespace(bot_data={BACKEND_CLIENT_KEY: backend}),
@@ -414,3 +419,77 @@ def test_long_history_messages_are_split_without_data_loss() -> None:
 
     assert all(0 < len(chunk) <= 100 for chunk in chunks)
     assert "".join(chunks) == value
+
+
+@pytest.mark.asyncio
+async def test_program_command_parses_header_prescription_and_notes() -> None:
+    from app.backend import ProgramEventResult, ProgramWorkoutSummary, PlannedExerciseSummary
+
+    update, context, message, backend = _objects()
+    message.text = "/program 1 push, panca 3x6 180s spinte 2x8 120s, Forza"
+    backend.process_program_event.return_value = ProgramEventResult(
+        kind="created",
+        program_workout=ProgramWorkoutSummary(
+            day_number=1, alias="push", notes="Forza",
+            items=(PlannedExerciseSummary("Panca", 3, 6, 180),),
+        ),
+    )
+
+    await create_program(update, context)
+
+    backend.process_program_event.assert_awaited_once_with(
+        telegram_user_id=12345, update_id=987, action="create",
+        day_number=1, alias="push", selector=None,
+        text="panca 3x6 180s spinte 2x8 120s", notes="Forza",
+    )
+
+
+@pytest.mark.asyncio
+async def test_edit_and_new_program_commands_send_expected_events() -> None:
+    from app.backend import ProgramEventResult
+
+    update, context, message, backend = _objects()
+    backend.process_program_event.return_value = ProgramEventResult(kind="reset")
+    message.text = "/newprogram"
+    await new_program(update, context)
+    backend.process_program_event.assert_awaited_once_with(
+        telegram_user_id=12345, update_id=987, action="new",
+        day_number=None, alias=None, selector=None, text=None, notes=None,
+    )
+
+    backend.process_program_event.reset_mock()
+    backend.process_program_event.return_value = ProgramEventResult(
+        kind="needs_clarification", clarification_message="Quali serie?"
+    )
+    message.text = "/editprogram push, panca 3x6"
+    await edit_program(update, context)
+    backend.process_program_event.assert_awaited_once_with(
+        telegram_user_id=12345, update_id=987, action="edit",
+        day_number=None, alias=None, selector="push", text="panca 3x6", notes=None,
+    )
+
+
+def test_program_opening_formats_load_before_repetitions() -> None:
+    from app.backend import PlannedExerciseSummary, PreviousExerciseSummary, ProgramWorkoutSummary
+
+    planned = PlannedExerciseSummary("Panca", 3, 6, 180)
+    result = WorkoutEventResult(
+        kind="opened", replayed=False, performed_on=date(2026, 8, 6),
+        exercises=(), total_exercises=0, total_sets=0, clarification_message=None,
+        program_workout=ProgramWorkoutSummary(
+            day_number=1, alias="push", notes=None, items=(planned,),
+        ),
+        program_history=(PreviousExerciseSummary(
+            planned=planned, performed_on=date(2026, 8, 1),
+            occurrences=(ExerciseSummary(
+                name="Panca", sets=(SetSummary(6, Decimal("80"), "kg"),),
+            ),),
+        ),),
+    )
+
+    rendered = _format_workout_result(result)
+    assert "80 kg × 6" in rendered
+    assert "6×80" not in rendered
+    assert "Oggi devi fare:" not in rendered
+    assert "Ultime esecuzioni:" not in rendered
+    assert rendered.count("Panca — 3×6 — recupero 180s") == 1

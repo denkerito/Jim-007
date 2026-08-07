@@ -6,6 +6,7 @@ from app.infrastructure.database.repositories import (
     SqlAlchemyExerciseRepository,
     SqlAlchemyExternalIdentityRepository,
     SqlAlchemyProcessedCommandRepository,
+    SqlAlchemyProgramWorkoutRepository,
     SqlAlchemyUserRepository,
     SqlAlchemyWorkoutRepository,
 )
@@ -23,6 +24,7 @@ class SqlAlchemyUnitOfWork:
         self.external_identities = SqlAlchemyExternalIdentityRepository(self._session)
         self.exercises = SqlAlchemyExerciseRepository(self._session)
         self.workouts = SqlAlchemyWorkoutRepository(self._session)
+        self.program_workouts = SqlAlchemyProgramWorkoutRepository(self._session)
         self.processed_commands = SqlAlchemyProcessedCommandRepository(self._session)
         return self
 

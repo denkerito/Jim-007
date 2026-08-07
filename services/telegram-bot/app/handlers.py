@@ -13,6 +13,7 @@ from app.presentation import (
     _format_workout_result,
     _format_workout_status,
     _split_telegram_message,
+    _format_program_event,
 )
 
 
@@ -39,8 +40,12 @@ HELP_MESSAGE = (
     "/cancel - elimina il workout aperto\n"
     "/history [limite] - mostra gli ultimi workout\n"
     "/exercise <nome> [limite] - mostra lo storico di un esercizio\n"
+    "/newprogram - disattiva le giornate programmate correnti\n"
+    "/program <numero> <alias>, <scheda>[, note] - salva una giornata\n"
+    "/editprogram <numero|alias>, <scheda>[, note] - riscrive una giornata\n"
     "/help - mostra questo messaggio"
 )
+PROGRAM_ERROR_MESSAGE = "Non riesco a modificare il programma in questo momento. Riprova tra poco."
 
 
 def _backend(context: ContextTypes.DEFAULT_TYPE) -> BackendClient | None:
@@ -178,6 +183,97 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     message = update.effective_message
     if message is not None:
         await message.reply_text(HELP_MESSAGE)
+
+
+def _raw_command_payload(text: str | None) -> str:
+    if not text:
+        return ""
+    return text.partition(" ")[2].strip()
+
+
+async def _send_program_event(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, *, action: Literal["new", "create", "edit"],
+    day_number: int | None = None, alias: str | None = None,
+    selector: str | None = None, text: str | None = None, notes: str | None = None,
+) -> None:
+    parts = _private_event_parts(update)
+    if parts is None:
+        message = update.effective_message
+        if message is not None:
+            await message.reply_text("Per gestire il programma, usa una chat privata con il bot.")
+        return
+    message, user, update_id = parts
+    backend = _backend(context)
+    if backend is None:
+        await message.reply_text(PROGRAM_ERROR_MESSAGE)
+        return
+    try:
+        result = await backend.process_program_event(
+            telegram_user_id=user.id, update_id=update_id, action=action,
+            day_number=day_number, alias=alias, selector=selector, text=text, notes=notes,
+        )
+    except BackendError as error:
+        messages = {
+            "external_identity_not_registered": "Registrati prima con /start.",
+            "programworkoutconflict": "Numero o alias gia in uso. Usa /editprogram per sostituire la giornata.",
+            "not_found": "Non trovo una giornata attiva con questo numero o alias.",
+        }
+        await message.reply_text(messages.get(error.code, PROGRAM_ERROR_MESSAGE))
+        return
+    for chunk in _split_telegram_message(_format_program_event(result)):
+        await message.reply_text(chunk)
+
+
+async def new_program(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if message is None:
+        return
+    if _raw_command_payload(message.text):
+        await message.reply_text("Uso: /newprogram")
+        return
+    await _send_program_event(update, context, action="new")
+
+
+async def create_program(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if message is None:
+        return
+    parts = _raw_command_payload(message.text).split(",", maxsplit=2)
+    if len(parts) < 2:
+        await message.reply_text("Uso: /program <numero> <alias>, <scheda>[, note]")
+        return
+    header = parts[0].strip().split(maxsplit=1)
+    try:
+        day_number = int(header[0])
+    except (ValueError, IndexError):
+        day_number = 0
+    alias = header[1].strip() if len(header) == 2 else ""
+    prescription = parts[1].strip()
+    notes = parts[2].strip() or None if len(parts) == 3 else None
+    if not 1 <= day_number <= 32767 or not alias or alias.isdecimal() or not prescription:
+        await message.reply_text("Uso: /program <numero> <alias>, <scheda>[, note]")
+        return
+    await _send_program_event(
+        update, context, action="create", day_number=day_number,
+        alias=alias, text=prescription, notes=notes,
+    )
+
+
+async def edit_program(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if message is None:
+        return
+    parts = _raw_command_payload(message.text).split(",", maxsplit=2)
+    selector = parts[0].strip() if parts else ""
+    prescription = parts[1].strip() if len(parts) >= 2 else ""
+    notes = parts[2].strip() or None if len(parts) == 3 else None
+    if not selector or not prescription:
+        await message.reply_text("Uso: /editprogram <numero|alias>, <scheda>[, note]")
+        return
+    await _send_program_event(
+        update, context, action="edit", selector=selector,
+        text=prescription, notes=notes,
+    )
 
 
 async def workout_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

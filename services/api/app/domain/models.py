@@ -29,6 +29,49 @@ class WorkoutStatus(StrEnum):
     COMPLETED = "completed"
 
 
+class ProgramWorkoutItem(DomainModel):
+    id: UUID
+    position: int = Field(gt=0, le=32767)
+    exercise_name: str
+    normalized_exercise_name: str
+    exercise_id: UUID | None = None
+    target_sets: int = Field(gt=0, le=32767)
+    target_repetitions: int = Field(gt=0, le=32767)
+    rest_seconds: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def names_must_be_normalized(self) -> Self:
+        cleaned = clean_required_text(self.exercise_name)
+        if not cleaned or cleaned != self.exercise_name:
+            raise ValueError("program exercise name must be clean and non-blank")
+        if self.normalized_exercise_name != normalize_exercise_name(self.exercise_name):
+            raise ValueError("normalized program exercise name does not match")
+        return self
+
+
+class ProgramWorkout(DomainModel):
+    id: UUID
+    user_id: UUID
+    day_number: int = Field(gt=0, le=32767)
+    alias: str
+    normalized_alias: str
+    notes: str | None = None
+    created_at: datetime
+    deactivated_at: datetime | None = None
+    items: tuple[ProgramWorkoutItem, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def identity_and_positions_must_be_valid(self) -> Self:
+        cleaned = clean_required_text(self.alias)
+        if not cleaned or cleaned != self.alias or cleaned.isdecimal():
+            raise ValueError("program alias must be clean, non-numeric and non-blank")
+        if self.normalized_alias != normalize_exercise_name(self.alias):
+            raise ValueError("normalized program alias does not match")
+        if tuple(item.position for item in self.items) != tuple(range(1, len(self.items) + 1)):
+            raise ValueError("program item positions must be consecutive")
+        return self
+
+
 class User(DomainModel):
     id: UUID
     locale: str
@@ -133,6 +176,7 @@ class Workout(DomainModel):
     notes: str | None = None
     created_at: datetime
     completed_at: datetime | None = None
+    program_workout: ProgramWorkout | None = None
     exercises: tuple[WorkoutExercise, ...] = ()
 
     @model_validator(mode="after")

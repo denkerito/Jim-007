@@ -33,6 +33,10 @@ class IdempotencyConflictError(ConflictError):
     """An idempotency key was reused for a different command."""
 
 
+class ProgramWorkoutConflictError(ConflictError):
+    """An active programmed workout already uses the number or alias."""
+
+
 class InvalidWorkoutStateError(ConflictError):
     """A workout cannot perform the requested state transition."""
 

@@ -19,6 +19,9 @@ from app.handlers import (
     undo_workout,
     workout_history,
     workout_status,
+    new_program,
+    create_program,
+    edit_program,
 )
 
 
@@ -39,6 +42,9 @@ async def _set_bot_commands(application: Application) -> None:
             BotCommand("cancel", "Elimina il workout aperto"),
             BotCommand("history", "Mostra lo storico workout"),
             BotCommand("exercise", "Mostra lo storico esercizio"),
+            BotCommand("newprogram", "Inizia un nuovo programma"),
+            BotCommand("program", "Salva una giornata programmata"),
+            BotCommand("editprogram", "Riscrive una giornata programmata"),
             BotCommand("help", "Mostra i comandi disponibili"),
         )
     )
@@ -73,6 +79,9 @@ def main() -> None:
     application.add_handler(CommandHandler("cancel", cancel_workout))
     application.add_handler(CommandHandler("history", workout_history))
     application.add_handler(CommandHandler("exercise", exercise_history))
+    application.add_handler(CommandHandler("newprogram", new_program))
+    application.add_handler(CommandHandler("program", create_program))
+    application.add_handler(CommandHandler("editprogram", edit_program))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, log_workout))
     application.run_polling(allowed_updates=Update.ALL_TYPES)

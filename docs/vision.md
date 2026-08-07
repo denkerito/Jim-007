@@ -93,6 +93,11 @@ ogni messaggio testuale aggiunge uno o piu esercizi e `/end` completa il workout
 Un'interpretazione ambigua non produce scritture e genera una richiesta di
 chiarimento. Non e prevista conferma prima del salvataggio.
 
+Le giornate salvate trasformano il diario in uno strumento utilizzabile durante
+l'allenamento: l'utente richiama numero o alias, vede la prescrizione e confronta
+subito ogni esercizio con la sua ultima esecuzione. Il piano resta indicativo e non
+limita cio che puo essere effettivamente registrato.
+
 `/status` mostra il contenuto completo del draft, `/undo` rimuove atomicamente
 tutti gli esercizi aggiunti dall'ultimo messaggio e `/cancel` elimina definitivamente
 il draft. `/help` riepiloga i comandi disponibili. Queste operazioni non usano l'LLM.

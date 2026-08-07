@@ -18,6 +18,9 @@ class CommandOperation(StrEnum):
     COMPLETE_WORKOUT = "complete_workout"
     CANCEL_WORKOUT = "cancel_workout"
     UNDO_WORKOUT_MESSAGE = "undo_workout_message"
+    RESET_PROGRAM = "reset_program"
+    CREATE_PROGRAM_WORKOUT = "create_program_workout"
+    EDIT_PROGRAM_WORKOUT = "edit_program_workout"
 
 
 ResourceT = TypeVar("ResourceT", Workout, WorkoutExercise)

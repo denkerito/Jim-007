@@ -16,6 +16,8 @@ from app.domain.models import (
     User,
     Workout,
     WorkoutExercise,
+    ProgramWorkout,
+    ProgramWorkoutItem,
 )
 
 
@@ -115,6 +117,87 @@ class WorkoutInterpretationContext(CommandModel):
     preferred_load_unit: LoadUnit
 
 
+class ProgramWorkoutCatalogItem(CommandModel):
+    id: UUID
+    day_number: int
+    alias: str
+
+
+class ProgramExerciseResolutionInput(CommandModel):
+    item_id: UUID
+    name: str
+
+
+class ProgramExerciseResolutionItem(CommandModel):
+    item_id: UUID
+    exercise_id: UUID | None = None
+
+
+class ProgramExerciseResolution(CommandModel):
+    resolutions: tuple[ProgramExerciseResolutionItem, ...]
+
+
+class PlannedExerciseInput(CommandModel):
+    catalog_exercise_id: UUID | None = None
+    name: str = Field(min_length=1, max_length=255)
+    target_sets: int | None = Field(default=None, gt=0, le=32767)
+    target_repetitions: int | None = Field(default=None, gt=0, le=32767)
+    rest_seconds: int | None = Field(default=None, gt=0)
+
+    @field_validator("name")
+    @classmethod
+    def planned_name_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("planned exercise name must not be blank")
+        return value
+
+
+class ProgramWorkoutInterpretation(CommandModel):
+    status: InterpretationStatus
+    exercises: tuple[PlannedExerciseInput, ...] = ()
+    clarification_message: str | None = None
+
+    @model_validator(mode="after")
+    def status_must_match_payload(self) -> "ProgramWorkoutInterpretation":
+        if self.status is InterpretationStatus.READY:
+            if (
+                not self.exercises
+                or self.clarification_message is not None
+                or any(
+                    item.target_sets is None or item.target_repetitions is None
+                    for item in self.exercises
+                )
+            ):
+                raise ValueError("a ready program requires exercises only")
+        elif not (self.clarification_message or "").strip():
+            raise ValueError("a clarification requires a message")
+        return self
+
+
+class WorkoutStartInterpretation(CommandModel):
+    status: InterpretationStatus
+    kind: Literal["date", "program"] | None = None
+    performed_on: date | None = None
+    program_workout_id: UUID | None = None
+    notes: str | None = None
+    clarification_message: str | None = None
+
+    @model_validator(mode="after")
+    def status_must_match_payload(self) -> "WorkoutStartInterpretation":
+        if self.status is InterpretationStatus.NEEDS_CLARIFICATION:
+            if self.kind is not None or self.performed_on is not None or self.program_workout_id is not None or not (self.clarification_message or "").strip():
+                raise ValueError("a clarification requires only a message")
+        elif self.kind == "date":
+            if self.performed_on is None or self.program_workout_id is not None or self.clarification_message is not None:
+                raise ValueError("a date start requires performed_on only")
+        elif self.kind == "program":
+            if self.program_workout_id is None or self.performed_on is not None or self.clarification_message is not None:
+                raise ValueError("a program start requires program_workout_id only")
+        else:
+            raise ValueError("a ready start requires a kind")
+        return self
+
+
 class InterpretedExercise(CommandModel):
     catalog_exercise_id: UUID | None = None
     name: str = Field(min_length=1, max_length=255)
@@ -166,6 +249,45 @@ class CreateWorkoutCommand(CommandModel):
     request_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     performed_on: date | None = None
     notes: str | None = None
+    program_workout_id: UUID | None = None
+
+
+class ProgramEventAction(StrEnum):
+    NEW = "new"
+    CREATE = "create"
+    EDIT = "edit"
+
+
+class ProcessProgramEventCommand(CommandModel):
+    provider: str = Field(min_length=1, max_length=32)
+    provider_subject: str = Field(min_length=1, max_length=255)
+    action: ProgramEventAction
+    day_number: int | None = Field(default=None, gt=0, le=32767)
+    alias: str | None = Field(default=None, max_length=64)
+    selector: str | None = Field(default=None, max_length=64)
+    text: str | None = Field(default=None, max_length=4096)
+    notes: str | None = Field(default=None, max_length=4096)
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    request_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def action_must_match_payload(self) -> "ProcessProgramEventCommand":
+        if self.action is ProgramEventAction.NEW:
+            if any(value is not None for value in (self.day_number, self.alias, self.selector, self.text, self.notes)):
+                raise ValueError("new program events do not accept a payload")
+        elif self.action is ProgramEventAction.CREATE:
+            if self.day_number is None or not (self.alias or "").strip() or not (self.text or "").strip() or self.selector is not None:
+                raise ValueError("create program events require day_number, alias and text")
+        elif not (self.selector or "").strip() or not (self.text or "").strip() or self.day_number is not None or self.alias is not None:
+            raise ValueError("edit program events require selector and text")
+        return self
+
+    @field_validator("alias")
+    @classmethod
+    def alias_must_not_be_numeric(cls, value: str | None) -> str | None:
+        if value is not None and value.strip().isdecimal():
+            raise ValueError("program alias must not be numeric")
+        return value
 
 
 class AddExerciseToWorkoutCommand(CommandModel):
@@ -343,6 +465,22 @@ class WorkoutEventResult:
     workout: Workout | None = None
     added_exercises: tuple[WorkoutExercise, ...] = ()
     removed_exercises: tuple[WorkoutExercise, ...] = ()
+    clarification_message: str | None = None
+    replayed: bool = False
+    program_history: tuple["ProgramExerciseHistory", ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramExerciseHistory:
+    item: ProgramWorkoutItem
+    latest: "ExerciseHistoryItem | None" = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramEventResult:
+    kind: Literal["reset", "created", "edited", "needs_clarification"]
+    program_workout: ProgramWorkout | None = None
+    deactivated_count: int = 0
     clarification_message: str | None = None
     replayed: bool = False
 

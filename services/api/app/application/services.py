@@ -137,6 +137,7 @@ class CreateWorkout:
                 user_id=command.user_id,
                 performed_on=performed_on,
                 notes=command.notes,
+                program_workout_id=command.program_workout_id,
             )
             await uow.commit()
             return CommandResult(workout, replayed=False)

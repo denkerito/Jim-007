@@ -108,6 +108,76 @@ class Exercise(Base):
     )
 
 
+class ProgramWorkout(Base):
+    __tablename__ = "program_workout"
+    __table_args__ = (
+        UniqueConstraint("user_id", "id"),
+        CheckConstraint("day_number > 0", name="day_number_positive"),
+        CheckConstraint("btrim(alias) <> ''", name="alias_not_blank"),
+        CheckConstraint("btrim(normalized_alias) <> ''", name="normalized_alias_not_blank"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), ForeignKey("app_user.id"), nullable=False
+    )
+    day_number: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    alias: Mapped[str] = mapped_column(String(64), nullable=False)
+    normalized_alias: Mapped[str] = mapped_column(String(64), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    items: Mapped[list["ProgramWorkoutItem"]] = relationship(
+        back_populates="program_workout", cascade="all, delete-orphan", lazy="raise",
+        order_by="ProgramWorkoutItem.position",
+    )
+
+
+Index(
+    "uq_program_workout_active_day_number",
+    ProgramWorkout.user_id, ProgramWorkout.day_number, unique=True,
+    postgresql_where=ProgramWorkout.deactivated_at.is_(None),
+)
+Index(
+    "uq_program_workout_active_alias",
+    ProgramWorkout.user_id, ProgramWorkout.normalized_alias, unique=True,
+    postgresql_where=ProgramWorkout.deactivated_at.is_(None),
+)
+
+
+class ProgramWorkoutItem(Base):
+    __tablename__ = "program_workout_item"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "program_workout_id"],
+            ["program_workout.user_id", "program_workout.id"], ondelete="CASCADE",
+        ),
+        UniqueConstraint("program_workout_id", "position"),
+        CheckConstraint("position > 0", name="position_positive"),
+        CheckConstraint("btrim(exercise_name) <> ''", name="exercise_name_not_blank"),
+        CheckConstraint("btrim(normalized_exercise_name) <> ''", name="normalized_exercise_name_not_blank"),
+        CheckConstraint("target_sets > 0", name="target_sets_positive"),
+        CheckConstraint("target_repetitions > 0", name="target_repetitions_positive"),
+        CheckConstraint("rest_seconds IS NULL OR rest_seconds > 0", name="rest_seconds_positive"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=False)
+    program_workout_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=False)
+    position: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    exercise_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    normalized_exercise_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    exercise_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), ForeignKey("exercise.id", ondelete="SET NULL")
+    )
+    target_sets: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    target_repetitions: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    rest_seconds: Mapped[int | None] = mapped_column(nullable=True)
+    program_workout: Mapped[ProgramWorkout] = relationship(back_populates="items", lazy="raise")
+
+
 class Workout(Base):
     __tablename__ = "workout"
     __table_args__ = (
@@ -135,6 +205,10 @@ class Workout(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    program_workout_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), ForeignKey("program_workout.id", ondelete="SET NULL")
+    )
+    program_workout: Mapped[ProgramWorkout | None] = relationship(lazy="raise")
     exercises: Mapped[list["WorkoutExercise"]] = relationship(
         back_populates="workout",
         cascade="all, delete-orphan",

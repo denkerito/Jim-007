@@ -9,6 +9,10 @@ from app.backend import (
     WorkoutEventResult,
     WorkoutHistoryItem,
     WorkoutStatusResult,
+    ProgramEventResult,
+    ProgramWorkoutSummary,
+    PlannedExerciseSummary,
+    PreviousExerciseSummary,
 )
 
 
@@ -40,6 +44,24 @@ def _format_workout_result(result: WorkoutEventResult) -> str:
     if result.replayed:
         return "Questo aggiornamento era gia stato elaborato."
     if result.kind == "opened":
+        if result.program_workout is not None:
+            program = result.program_workout
+            lines = [
+                f"Workout iniziato — {result.performed_on.strftime('%d/%m/%Y') if result.performed_on else 'oggi'} ✅",
+                "",
+                f"Giorno {program.day_number} — {program.alias}",
+            ]
+            if program.notes:
+                lines.append(f"Note: {program.notes}")
+            if result.program_history:
+                lines.append("")
+                lines.extend(_format_previous_exercise(item) for item in result.program_history)
+            else:
+                lines.extend(
+                    _format_planned_exercise(item, number)
+                    for number, item in enumerate(program.items, start=1)
+                )
+            return "\n".join(lines)
         if result.performed_on is None:
             return "Workout aperto ✅"
         return f"Workout aperto per il {result.performed_on.strftime('%d/%m/%Y')} ✅"
@@ -71,6 +93,9 @@ def _format_workout_status(result: WorkoutStatusResult) -> str:
     lines = [f"Workout aperto del {workout.performed_on.strftime('%d/%m/%Y')}"]
     if workout.notes:
         lines.append(f"Note workout: {workout.notes}")
+    if workout.program_workout is not None:
+        lines.extend(["Piano previsto:", _format_program_workout(workout.program_workout)])
+        lines.append("Registrato finora:")
     if not workout.exercises:
         lines.append("Nessun esercizio registrato.")
     else:
@@ -78,6 +103,47 @@ def _format_workout_status(result: WorkoutStatusResult) -> str:
             "\n\n".join(_format_history_exercise(item) for item in workout.exercises)
         )
     return "\n\n".join(lines)
+
+
+def _format_planned_exercise(value: PlannedExerciseSummary, number: int | None = None) -> str:
+    prefix = f"{number}. " if number is not None else ""
+    rendered = f"{prefix}{value.name} — {value.target_sets}×{value.target_repetitions}"
+    if value.rest_seconds is not None:
+        rendered += f" — recupero {value.rest_seconds}s"
+    return rendered
+
+
+def _format_program_workout(value: ProgramWorkoutSummary) -> str:
+    lines = [f"Giorno {value.day_number} — {value.alias}"]
+    if value.notes:
+        lines.append(f"Note: {value.notes}")
+    lines.extend(_format_planned_exercise(item, number) for number, item in enumerate(value.items, start=1))
+    return "\n".join(lines)
+
+
+def _format_previous_exercise(value: PreviousExerciseSummary) -> str:
+    lines = [_format_planned_exercise(value.planned)]
+    if value.performed_on is None or not value.occurrences:
+        lines.append("Nessuna esecuzione precedente.")
+        return "\n".join(lines)
+    lines.append(f"Ultima volta: {value.performed_on.strftime('%d/%m/%Y')}")
+    if value.workout_notes:
+        lines.append(f"Note workout: {value.workout_notes}")
+    lines.extend(_format_history_exercise(item) for item in value.occurrences)
+    return "\n".join(lines)
+
+
+def _format_program_event(result: ProgramEventResult) -> str:
+    if result.kind == "needs_clarification":
+        return result.clarification_message or "Puoi riscrivere la scheda?"
+    if result.replayed:
+        return "Questo aggiornamento era gia stato elaborato."
+    if result.kind == "reset":
+        return f"Nuovo programma iniziato. Giornate disattivate: {result.deactivated_count}."
+    if result.program_workout is None:
+        return "Programma aggiornato."
+    verb = "Giornata salvata" if result.kind == "created" else "Giornata aggiornata"
+    return f"{verb} ✅\n\n{_format_program_workout(result.program_workout)}"
 
 
 def _format_history_exercise(value: ExerciseSummary) -> str:

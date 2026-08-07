@@ -61,10 +61,25 @@ erDiagram
     USER ||--o{ EXTERNAL_IDENTITY : "possiede"
     USER ||--o{ EXERCISE : "mantiene nel catalogo"
     USER ||--o{ WORKOUT : "registra"
+    USER ||--o{ PROGRAM_WORKOUT : "programma"
+    PROGRAM_WORKOUT ||--|{ PROGRAM_WORKOUT_ITEM : "prescrive"
+    PROGRAM_WORKOUT o|--o{ WORKOUT : "origina"
     WORKOUT ||--|{ WORKOUT_EXERCISE : "contiene"
     EXERCISE ||--o{ WORKOUT_EXERCISE : "viene eseguito come"
     WORKOUT_EXERCISE ||--|{ PERFORMED_SET : "contiene"
 ```
+
+### 3.1.1 Workout programmati
+
+`ProgramWorkout` rappresenta una versione immutabile di una giornata programmata.
+Possiede un numero e un alias, univoci tra le sole versioni attive dello stesso
+utente. `deactivated_at` rende la versione non selezionabile senza eliminare i
+workout che la referenziano.
+
+Ogni `ProgramWorkoutItem` conserva nome e nome normalizzato dell'esercizio, serie,
+ripetizioni e recupero opzionale. Il riferimento a `Exercise` e nullable: viene
+valorizzato soltanto quando l'esercizio esiste gia e la programmazione non crea mai
+elementi del catalogo personale.
 
 ### 3.2 User
 

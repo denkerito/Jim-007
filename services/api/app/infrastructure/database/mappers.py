@@ -6,6 +6,8 @@ from app.domain.models import (
     Load,
     LoadUnit,
     PerformedSet,
+    ProgramWorkout,
+    ProgramWorkoutItem,
     User,
     Workout,
     WorkoutExercise,
@@ -47,6 +49,32 @@ def to_external_identity(model: orm.ExternalIdentity) -> ExternalIdentity:
     )
 
 
+def to_program_workout(model: orm.ProgramWorkout) -> ProgramWorkout:
+    return ProgramWorkout(
+        id=model.id,
+        user_id=model.user_id,
+        day_number=model.day_number,
+        alias=model.alias,
+        normalized_alias=model.normalized_alias,
+        notes=model.notes,
+        created_at=model.created_at,
+        deactivated_at=model.deactivated_at,
+        items=tuple(
+            ProgramWorkoutItem(
+                id=item.id,
+                position=item.position,
+                exercise_name=item.exercise_name,
+                normalized_exercise_name=item.normalized_exercise_name,
+                exercise_id=item.exercise_id,
+                target_sets=item.target_sets,
+                target_repetitions=item.target_repetitions,
+                rest_seconds=item.rest_seconds,
+            )
+            for item in model.items
+        ),
+    )
+
+
 def to_workout_exercise(model: orm.WorkoutExercise) -> WorkoutExercise:
     return WorkoutExercise(
         id=model.id,
@@ -79,5 +107,10 @@ def to_workout(model: orm.Workout) -> Workout:
         notes=model.notes,
         created_at=model.created_at,
         completed_at=model.completed_at,
+        program_workout=(
+            to_program_workout(model.program_workout)
+            if model.program_workout is not None
+            else None
+        ),
         exercises=tuple(to_workout_exercise(item) for item in model.exercises),
     )

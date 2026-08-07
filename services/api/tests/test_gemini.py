@@ -11,6 +11,11 @@ from app.application.commands import (
     InterpretationStatus,
     InterpretedExercise,
     PerformedSetInput,
+    ProgramExerciseResolution,
+    ProgramExerciseResolutionInput,
+    ProgramExerciseResolutionItem,
+    PlannedExerciseInput,
+    ProgramWorkoutInterpretation,
     WorkoutInterpretationContext,
     WorkoutLogInterpretation,
 )
@@ -132,3 +137,67 @@ async def test_gemini_resolves_history_query_only_against_catalog(monkeypatch) -
     assert "panca" in prompt
     assert str(exercise_id) in prompt
     assert "Non inventare ID" in prompt
+
+
+@pytest.mark.asyncio
+async def test_gemini_accepts_program_resolution_without_status(monkeypatch) -> None:
+    from uuid import uuid4
+
+    item_id = uuid4()
+    exercise_id = uuid4()
+    expected = ProgramExerciseResolution(
+        resolutions=(
+            ProgramExerciseResolutionItem(
+                item_id=item_id,
+                exercise_id=exercise_id,
+            ),
+        )
+    )
+    client, create = _fake_client(expected.model_dump_json())
+    monkeypatch.setattr("app.infrastructure.llm.gemini.genai.Client", lambda **_: client)
+    adapter = GeminiWorkoutTextInterpreter(
+        api_key="secret",
+        model="gemini-3.5-flash-lite",
+        timeout_seconds=8,
+        max_output_tokens=4096,
+        thinking_level="minimal",
+    )
+
+    result = await adapter.resolve_program_exercises(
+        items=(ProgramExerciseResolutionInput(item_id=item_id, name="Panca"),),
+        locale="it-IT",
+        catalog=(ExerciseCatalogItem(id=exercise_id, name="Panca piana"),),
+    )
+
+    assert result == expected
+    assert str(item_id) in create.await_args.kwargs["input"]
+    assert str(exercise_id) in create.await_args.kwargs["input"]
+
+
+@pytest.mark.asyncio
+async def test_gemini_program_clarification_ignores_partial_exercises(monkeypatch) -> None:
+    expected = ProgramWorkoutInterpretation(
+        status=InterpretationStatus.NEEDS_CLARIFICATION,
+        exercises=(
+            PlannedExerciseInput(
+                name="Rematore", target_sets=2,
+                target_repetitions=8, rest_seconds=120,
+            ),
+            PlannedExerciseInput(name="Lat machine", rest_seconds=120),
+        ),
+        clarification_message="Quante serie e ripetizioni per la lat machine?",
+    )
+    client, _ = _fake_client(expected.model_dump_json())
+    monkeypatch.setattr("app.infrastructure.llm.gemini.genai.Client", lambda **_: client)
+    adapter = GeminiWorkoutTextInterpreter(
+        api_key="secret", model="gemini-3.5-flash-lite",
+        timeout_seconds=8, max_output_tokens=4096, thinking_level="minimal",
+    )
+
+    result = await adapter.interpret_program(
+        text="rematore 2x8 120s lat machine 120s",
+        context=_context(), catalog=(),
+    )
+
+    assert result.status is InterpretationStatus.NEEDS_CLARIFICATION
+    assert result.clarification_message == "Quante serie e ripetizioni per la lat machine?"

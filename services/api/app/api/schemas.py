@@ -15,6 +15,8 @@ from app.application.commands import (
     WorkoutEventResult,
     WorkoutHistoryPage,
     WorkoutStatusResult,
+    ProgramEventAction,
+    ProgramEventResult,
 )
 from app.domain import models as domain
 
@@ -103,6 +105,25 @@ class WorkoutEventRequest(ApiModel):
         return self
 
 
+class ProgramEventRequest(ApiModel):
+    provider: str = Field(min_length=1, max_length=32)
+    provider_subject: str = Field(min_length=1, max_length=255)
+    action: ProgramEventAction
+    day_number: int | None = Field(default=None, gt=0, le=32767)
+    alias: str | None = Field(default=None, max_length=64)
+    selector: str | None = Field(default=None, max_length=64)
+    text: str | None = Field(default=None, max_length=4096)
+    notes: str | None = Field(default=None, max_length=4096)
+
+    @model_validator(mode="after")
+    def action_must_match_payload(self) -> "ProgramEventRequest":
+        from app.application.commands import ProcessProgramEventCommand
+        ProcessProgramEventCommand(
+            **self.model_dump(), idempotency_key="validation", request_hash="0" * 64
+        )
+        return self
+
+
 class WorkoutStatusRequest(ApiModel):
     provider: str = Field(min_length=1, max_length=32)
     provider_subject: str = Field(min_length=1, max_length=255)
@@ -143,6 +164,25 @@ class WorkoutExerciseResponse(ApiModel):
     sets: tuple[PerformedSetResponse, ...]
 
 
+class ProgramWorkoutItemResponse(ApiModel):
+    id: UUID
+    position: int
+    exercise_name: str
+    exercise_id: UUID | None
+    target_sets: int
+    target_repetitions: int
+    rest_seconds: int | None
+
+
+class ProgramWorkoutResponse(ApiModel):
+    id: UUID
+    day_number: int
+    alias: str
+    notes: str | None
+    active: bool
+    items: tuple[ProgramWorkoutItemResponse, ...]
+
+
 class WorkoutResponse(ApiModel):
     id: UUID
     user_id: UUID
@@ -151,7 +191,15 @@ class WorkoutResponse(ApiModel):
     notes: str | None
     created_at: datetime
     completed_at: datetime | None
+    program_workout: ProgramWorkoutResponse | None = None
     exercises: tuple[WorkoutExerciseResponse, ...]
+
+
+class ProgramExerciseHistoryResponse(ApiModel):
+    item: ProgramWorkoutItemResponse
+    latest_performed_on: date | None = None
+    latest_workout_notes: str | None = None
+    latest_occurrences: tuple[WorkoutExerciseResponse, ...] = ()
 
 
 class WorkoutEventResponse(ApiModel):
@@ -167,6 +215,15 @@ class WorkoutEventResponse(ApiModel):
     workout: WorkoutResponse | None = None
     added_exercises: tuple[WorkoutExerciseResponse, ...] = ()
     removed_exercises: tuple[WorkoutExerciseResponse, ...] = ()
+    clarification_message: str | None = None
+    program_history: tuple[ProgramExerciseHistoryResponse, ...] = ()
+
+
+class ProgramEventResponse(ApiModel):
+    kind: Literal["reset", "created", "edited", "needs_clarification"]
+    replayed: bool = False
+    deactivated_count: int = 0
+    program_workout: ProgramWorkoutResponse | None = None
     clarification_message: str | None = None
 
 
@@ -299,7 +356,40 @@ def workout_response(value: domain.Workout) -> WorkoutResponse:
         notes=value.notes,
         created_at=value.created_at,
         completed_at=value.completed_at,
+        program_workout=(
+            program_workout_response(value.program_workout)
+            if value.program_workout is not None
+            else None
+        ),
         exercises=tuple(workout_exercise_response(item) for item in value.exercises),
+    )
+
+
+def program_workout_response(value: domain.ProgramWorkout) -> ProgramWorkoutResponse:
+    return ProgramWorkoutResponse(
+        id=value.id, day_number=value.day_number, alias=value.alias,
+        notes=value.notes, active=value.deactivated_at is None,
+        items=tuple(
+            ProgramWorkoutItemResponse(
+                id=item.id, position=item.position,
+                exercise_name=item.exercise_name, exercise_id=item.exercise_id,
+                target_sets=item.target_sets,
+                target_repetitions=item.target_repetitions,
+                rest_seconds=item.rest_seconds,
+            ) for item in value.items
+        ),
+    )
+
+
+def program_event_response(value: ProgramEventResult) -> ProgramEventResponse:
+    return ProgramEventResponse(
+        kind=value.kind, replayed=value.replayed,
+        deactivated_count=value.deactivated_count,
+        program_workout=(
+            program_workout_response(value.program_workout)
+            if value.program_workout is not None else None
+        ),
+        clarification_message=value.clarification_message,
     )
 
 
@@ -315,6 +405,25 @@ def workout_event_response(value: WorkoutEventResult) -> WorkoutEventResponse:
             workout_exercise_response(item) for item in value.removed_exercises
         ),
         clarification_message=value.clarification_message,
+        program_history=tuple(
+            ProgramExerciseHistoryResponse(
+                item=ProgramWorkoutItemResponse(
+                    id=entry.item.id, position=entry.item.position,
+                    exercise_name=entry.item.exercise_name,
+                    exercise_id=entry.item.exercise_id,
+                    target_sets=entry.item.target_sets,
+                    target_repetitions=entry.item.target_repetitions,
+                    rest_seconds=entry.item.rest_seconds,
+                ),
+                latest_performed_on=(entry.latest.performed_on if entry.latest else None),
+                latest_workout_notes=(entry.latest.workout_notes if entry.latest else None),
+                latest_occurrences=tuple(
+                    workout_exercise_response(item)
+                    for item in (entry.latest.occurrences if entry.latest else ())
+                ),
+            )
+            for entry in value.program_history
+        ),
     )
 
 

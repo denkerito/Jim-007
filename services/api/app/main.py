@@ -12,6 +12,7 @@ from app.api.identities import router as identities_router
 from app.api.workout_events import router as workout_events_router
 from app.api.workout_status import router as workout_status_router
 from app.api.workouts import router as workouts_router
+from app.api.program_events import router as program_events_router
 from app.config import get_settings
 from app.infrastructure.database.session import engine
 from app.infrastructure.llm import GeminiWorkoutTextInterpreter
@@ -49,6 +50,7 @@ app.include_router(history_queries_router)
 app.include_router(workouts_router)
 app.include_router(workout_events_router)
 app.include_router(workout_status_router)
+app.include_router(program_events_router)
 
 
 @app.get("/health/live", tags=["system"])
