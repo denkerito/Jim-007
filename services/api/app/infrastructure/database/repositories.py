@@ -1,6 +1,6 @@
 """SQLAlchemy implementations of the application persistence ports."""
 
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
 from sqlalchemy import delete, func, or_, select, tuple_, update
@@ -25,6 +25,10 @@ from app.infrastructure.database import models as orm
 from app.infrastructure.database.mappers import (
     to_exercise,
     to_external_identity,
+    to_auth_token,
+    to_telegram_link_request,
+    to_web_account,
+    to_web_session,
     to_user,
     to_workout,
     to_workout_exercise,
@@ -118,6 +122,17 @@ class SqlAlchemyExternalIdentityRepository:
         )
         return to_external_identity(model) if model is not None else None
 
+    async def get_by_user_provider(
+        self, user_id: UUID, provider: str
+    ):
+        model = await self._session.scalar(
+            select(orm.ExternalIdentity).where(
+                orm.ExternalIdentity.user_id == user_id,
+                orm.ExternalIdentity.provider == provider,
+            )
+        )
+        return to_external_identity(model) if model is not None else None
+
     async def create(
         self,
         *,
@@ -156,6 +171,249 @@ class SqlAlchemyExternalIdentityRepository:
         await self._session.flush()
         await self._session.refresh(model)
         return to_external_identity(model)
+
+    async def delete(self, identity_id: UUID) -> None:
+        await self._session.execute(
+            delete(orm.ExternalIdentity).where(orm.ExternalIdentity.id == identity_id)
+        )
+
+
+class SqlAlchemyWebAccountRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def acquire_email_lock(self, normalized_email: str) -> None:
+        await self._session.execute(
+            select(func.pg_advisory_xact_lock(func.hashtextextended(normalized_email, 0)))
+        )
+
+    async def get_by_user_id(self, user_id: UUID):
+        model = await self._session.get(orm.WebAccount, user_id)
+        return to_web_account(model) if model is not None else None
+
+    async def get_by_normalized_email(self, normalized_email: str):
+        model = await self._session.scalar(
+            select(orm.WebAccount).where(
+                orm.WebAccount.normalized_email == normalized_email
+            )
+        )
+        return to_web_account(model) if model is not None else None
+
+    async def create(self, *, user_id: UUID, email: str, normalized_email: str, password_hash: str):
+        model = orm.WebAccount(
+            user_id=user_id, email=email, normalized_email=normalized_email,
+            password_hash=password_hash,
+        )
+        self._session.add(model)
+        await self._session.flush()
+        await self._session.refresh(model)
+        return to_web_account(model)
+
+    async def verify_email(self, user_id: UUID, verified_at: datetime):
+        model = await self._session.get(orm.WebAccount, user_id)
+        if model is None:
+            raise RuntimeError("Web account disappeared")
+        model.email_verified_at = verified_at
+        await self._session.flush()
+        await self._session.refresh(model)
+        return to_web_account(model)
+
+    async def update_password(self, user_id: UUID, password_hash: str):
+        model = await self._session.get(orm.WebAccount, user_id)
+        if model is None:
+            raise RuntimeError("Web account disappeared")
+        model.password_hash = password_hash
+        model.failed_login_count = 0
+        model.locked_until = None
+        await self._session.flush()
+        await self._session.refresh(model)
+        return to_web_account(model)
+
+    async def record_login_failure(
+        self, user_id: UUID, *, failed_count: int, locked_until: datetime | None
+    ) -> None:
+        await self._session.execute(
+            update(orm.WebAccount).where(orm.WebAccount.user_id == user_id).values(
+                failed_login_count=failed_count, locked_until=locked_until
+            )
+        )
+
+    async def clear_login_failures(self, user_id: UUID) -> None:
+        await self._session.execute(
+            update(orm.WebAccount).where(orm.WebAccount.user_id == user_id).values(
+                failed_login_count=0, locked_until=None
+            )
+        )
+
+
+class SqlAlchemyWebSessionRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def create(
+        self, *, session_id: UUID, user_id: UUID, token_hash: str,
+        created_at: datetime, expires_at: datetime
+    ):
+        model = orm.WebSession(
+            id=session_id, user_id=user_id, token_hash=token_hash,
+            created_at=created_at, expires_at=expires_at,
+        )
+        self._session.add(model)
+        await self._session.flush()
+        return to_web_session(model)
+
+    async def get_active_by_hash(self, token_hash: str, now: datetime):
+        model = await self._session.scalar(
+            select(orm.WebSession).where(
+                orm.WebSession.token_hash == token_hash,
+                orm.WebSession.revoked_at.is_(None),
+                orm.WebSession.expires_at > now,
+            )
+        )
+        return to_web_session(model) if model is not None else None
+
+    async def revoke_by_hash(self, token_hash: str, revoked_at: datetime) -> None:
+        await self._session.execute(
+            update(orm.WebSession).where(
+                orm.WebSession.token_hash == token_hash,
+                orm.WebSession.revoked_at.is_(None),
+            ).values(revoked_at=revoked_at)
+        )
+
+    async def revoke_all_for_user(self, user_id: UUID, revoked_at: datetime) -> None:
+        await self._session.execute(
+            update(orm.WebSession).where(
+                orm.WebSession.user_id == user_id,
+                orm.WebSession.revoked_at.is_(None),
+            ).values(revoked_at=revoked_at)
+        )
+
+
+class SqlAlchemyAuthTokenRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def revoke_active(self, user_id: UUID, purpose: str, revoked_at: datetime) -> None:
+        await self._session.execute(
+            update(orm.AuthToken).where(
+                orm.AuthToken.user_id == user_id,
+                orm.AuthToken.purpose == purpose,
+                orm.AuthToken.consumed_at.is_(None),
+                orm.AuthToken.revoked_at.is_(None),
+            ).values(revoked_at=revoked_at)
+        )
+
+    async def create(
+        self, *, token_id: UUID, user_id: UUID, purpose: str, token_hash: str,
+        created_at: datetime, expires_at: datetime
+    ):
+        model = orm.AuthToken(
+            id=token_id, user_id=user_id, purpose=purpose, token_hash=token_hash,
+            created_at=created_at, expires_at=expires_at,
+        )
+        self._session.add(model)
+        await self._session.flush()
+        return to_auth_token(model)
+
+    async def get_for_update(self, token_hash: str):
+        model = await self._session.scalar(
+            select(orm.AuthToken).where(orm.AuthToken.token_hash == token_hash).with_for_update()
+        )
+        return to_auth_token(model) if model is not None else None
+
+    async def consume(self, token_id: UUID, consumed_at: datetime) -> None:
+        await self._session.execute(
+            update(orm.AuthToken).where(orm.AuthToken.id == token_id).values(consumed_at=consumed_at)
+        )
+
+
+class SqlAlchemyTelegramLinkRequestRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def acquire_user_lock(self, user_id: UUID) -> None:
+        await self._session.execute(
+            select(func.pg_advisory_xact_lock(func.hashtextextended(f"telegram-link:{user_id}", 0)))
+        )
+
+    async def revoke_pending_for_user(self, user_id: UUID, now: datetime) -> None:
+        await self._session.execute(
+            update(orm.TelegramLinkRequest).where(
+                orm.TelegramLinkRequest.user_id == user_id,
+                orm.TelegramLinkRequest.status.in_(("pending_telegram", "pending_web_confirmation")),
+            ).values(status="cancelled", cancelled_at=now)
+        )
+
+    async def create(
+        self, *, request_id: UUID, user_id: UUID, token_hash: str,
+        created_at: datetime, expires_at: datetime
+    ):
+        model = orm.TelegramLinkRequest(
+            id=request_id, user_id=user_id, token_hash=token_hash,
+            status="pending_telegram", created_at=created_at, expires_at=expires_at,
+        )
+        self._session.add(model)
+        await self._session.flush()
+        return to_telegram_link_request(model)
+
+    async def get_by_id_for_user(self, request_id: UUID, user_id: UUID):
+        model = await self._session.scalar(
+            select(orm.TelegramLinkRequest).where(
+                orm.TelegramLinkRequest.id == request_id,
+                orm.TelegramLinkRequest.user_id == user_id,
+            )
+        )
+        return to_telegram_link_request(model) if model is not None else None
+
+    async def get_by_id_for_update(self, request_id: UUID, user_id: UUID):
+        model = await self._session.scalar(
+            select(orm.TelegramLinkRequest).where(
+                orm.TelegramLinkRequest.id == request_id,
+                orm.TelegramLinkRequest.user_id == user_id,
+            ).with_for_update()
+        )
+        return to_telegram_link_request(model) if model is not None else None
+
+    async def get_by_hash_for_update(self, token_hash: str):
+        model = await self._session.scalar(
+            select(orm.TelegramLinkRequest).where(
+                orm.TelegramLinkRequest.token_hash == token_hash
+            ).with_for_update()
+        )
+        return to_telegram_link_request(model) if model is not None else None
+
+    async def set_candidate(
+        self, request_id: UUID, *, telegram_user_id: str,
+        username: str | None, display_name: str | None
+    ):
+        model = await self._session.get(orm.TelegramLinkRequest, request_id)
+        if model is None:
+            raise RuntimeError("Telegram link request disappeared")
+        model.status = "pending_web_confirmation"
+        model.candidate_telegram_user_id = telegram_user_id
+        model.candidate_username = username
+        model.candidate_display_name = display_name
+        await self._session.flush()
+        await self._session.refresh(model)
+        return to_telegram_link_request(model)
+
+    async def complete(self, request_id: UUID, completed_at: datetime):
+        model = await self._session.get(orm.TelegramLinkRequest, request_id)
+        if model is None:
+            raise RuntimeError("Telegram link request disappeared")
+        model.status = "completed"
+        model.completed_at = completed_at
+        await self._session.flush()
+        await self._session.refresh(model)
+        return to_telegram_link_request(model)
+
+    async def cancel(self, request_id: UUID, cancelled_at: datetime) -> None:
+        await self._session.execute(
+            update(orm.TelegramLinkRequest).where(
+                orm.TelegramLinkRequest.id == request_id,
+                orm.TelegramLinkRequest.status.in_(("pending_telegram", "pending_web_confirmation")),
+            ).values(status="cancelled", cancelled_at=cancelled_at)
+        )
 
 
 class SqlAlchemyExerciseRepository:

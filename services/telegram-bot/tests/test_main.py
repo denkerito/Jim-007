@@ -2,14 +2,13 @@ from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
 
 import pytest
 from app.backend import (
     BackendError,
     ExerciseSummary,
     HistoryQueryResult,
-    RegistrationResult,
+    TelegramConnectionResult,
     SetSummary,
     WorkoutEventResult,
     WorkoutHistoryItem,
@@ -76,41 +75,57 @@ def _objects(*, chat_type=ChatType.PRIVATE, user=True):
         update_id=987,
     )
     backend = SimpleNamespace(
-        register_telegram_user=AsyncMock(),
+        resolve_telegram_connection=AsyncMock(),
+        claim_telegram_link=AsyncMock(),
         process_workout_event=AsyncMock(),
         get_workout_status=AsyncMock(),
         query_history=AsyncMock(),
         process_program_event=AsyncMock(),
     )
     context = SimpleNamespace(
-        application=SimpleNamespace(bot_data={BACKEND_CLIENT_KEY: backend}),
+        application=SimpleNamespace(
+            bot_data={BACKEND_CLIENT_KEY: backend, "public_web_url": "https://app.test"}
+        ),
         args=[],
     )
     return update, context, message, backend
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("created", "expected"),
-    [
-        (True, "Registrazione completata ✅"),
-        (False, "Bentornato! Il tuo profilo è già registrato."),
-    ],
-)
-async def test_private_start_registers_and_replies(created: bool, expected: str) -> None:
+async def test_private_start_resolves_linked_account() -> None:
     update, context, message, backend = _objects()
-    backend.register_telegram_user.return_value = RegistrationResult(
-        user_id=uuid4(), created=created
-    )
+    backend.resolve_telegram_connection.return_value = TelegramConnectionResult(kind="linked")
 
     await start(update, context)
 
-    backend.register_telegram_user.assert_awaited_once_with(
+    backend.resolve_telegram_connection.assert_awaited_once_with(
         telegram_user_id=12345,
         username="first_name",
         display_name="First User",
     )
-    message.reply_text.assert_awaited_once_with(expected)
+    message.reply_text.assert_awaited_once_with(
+        "Account collegato. Bentornato! Usa /workout per iniziare."
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_link_records_candidate() -> None:
+    update, context, message, backend = _objects()
+    context.args = ["link_abcdefghijklmnopqrstuvwxyz1234567890ABCDEFG"]
+    backend.claim_telegram_link.return_value = TelegramConnectionResult(kind="candidate_recorded")
+
+    await start(update, context)
+
+    backend.claim_telegram_link.assert_awaited_once_with(
+        token="abcdefghijklmnopqrstuvwxyz1234567890ABCDEFG",
+        telegram_user_id=12345,
+        update_id=987,
+        username="first_name",
+        display_name="First User",
+    )
+    message.reply_text.assert_awaited_once_with(
+        "Account Telegram riconosciuto ✅\nTorna nella web app e conferma il collegamento."
+    )
 
 
 @pytest.mark.asyncio
@@ -119,9 +134,9 @@ async def test_group_start_redirects_to_private_chat() -> None:
 
     await start(update, context)
 
-    backend.register_telegram_user.assert_not_awaited()
+    backend.resolve_telegram_connection.assert_not_awaited()
     message.reply_text.assert_awaited_once_with(
-        "Per registrarti, apri una chat privata con il bot e invia /start."
+        "Per collegare Telegram, apri una chat privata con il bot."
     )
 
 
@@ -131,14 +146,14 @@ async def test_start_without_effective_user_returns_safe_error() -> None:
 
     await start(update, context)
 
-    backend.register_telegram_user.assert_not_awaited()
+    backend.resolve_telegram_connection.assert_not_awaited()
     message.reply_text.assert_awaited_once_with(REGISTRATION_ERROR_MESSAGE)
 
 
 @pytest.mark.asyncio
 async def test_backend_failure_returns_safe_error() -> None:
     update, context, message, backend = _objects()
-    backend.register_telegram_user.side_effect = BackendError("failed")
+    backend.resolve_telegram_connection.side_effect = BackendError("failed")
 
     await start(update, context)
 
@@ -289,7 +304,7 @@ async def test_help_is_local_and_does_not_require_registration() -> None:
 
     await help_command(update, context)
 
-    backend.register_telegram_user.assert_not_awaited()
+    backend.resolve_telegram_connection.assert_not_awaited()
     backend.process_workout_event.assert_not_awaited()
     message.reply_text.assert_awaited_once_with(HELP_MESSAGE)
 

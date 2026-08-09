@@ -12,9 +12,10 @@ from typing import Any
 
 API_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = API_ROOT.parents[1]
-CONTRACT_PATH = REPOSITORY_ROOT / "contracts" / "internal-api" / "v1" / "openapi.json"
+CONTRACT_PATH = REPOSITORY_ROOT / "contracts" / "internal-api" / "v2" / "openapi.json"
 INTERNAL_PATHS = (
-    "/internal/identities/telegram",
+    "/internal/telegram-link-requests/claim",
+    "/internal/telegram-connections/resolve",
     "/internal/workout-events",
     "/internal/program-events",
     "/internal/workout-status",

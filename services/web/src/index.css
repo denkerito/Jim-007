@@ -1,0 +1,18 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {@apply m-0 min-h-screen bg-cream text-ink antialiased; font-family: "DM Sans", sans-serif;}
+  h1,h2,h3 {@apply tracking-tight; font-family: "Manrope", sans-serif;}
+  input {@apply w-full rounded-xl border border-ink/15 bg-white px-4 py-3 outline-none transition focus:border-ink focus:ring-2 focus:ring-lime;}
+  button,a {@apply transition;}
+}
+@layer components {
+  .button {@apply inline-flex items-center justify-center rounded-xl bg-ink px-5 py-3 font-bold text-white hover:-translate-y-0.5 hover:bg-moss disabled:cursor-not-allowed disabled:opacity-50;}
+  .button-secondary {@apply button border border-ink/15 bg-white text-ink hover:bg-white;}
+  .card {@apply rounded-3xl border border-ink/10 bg-white p-6 shadow-card;}
+  .label {@apply mb-2 block text-sm font-semibold;}
+  .eyebrow {@apply text-xs font-bold uppercase tracking-[.2em] text-moss;}
+}

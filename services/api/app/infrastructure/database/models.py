@@ -84,6 +84,139 @@ class ExternalIdentity(Base):
     )
 
 
+class WebAccount(Base):
+    __tablename__ = "web_account"
+    __table_args__ = (
+        UniqueConstraint("normalized_email"),
+        CheckConstraint("btrim(email) <> ''", name="email_not_blank"),
+        CheckConstraint("btrim(normalized_email) <> ''", name="normalized_email_not_blank"),
+        CheckConstraint("failed_login_count >= 0", name="failed_login_count_non_negative"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("app_user.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    normalized_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failed_login_count: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default=text("0")
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class WebSession(Base):
+    __tablename__ = "web_session"
+    __table_args__ = (
+        UniqueConstraint("token_hash"),
+        CheckConstraint("token_hash ~ '^[0-9a-f]{64}$'", name="token_hash_sha256"),
+        CheckConstraint("expires_at > created_at", name="expires_after_creation"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), ForeignKey("app_user.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AuthToken(Base):
+    __tablename__ = "auth_token"
+    __table_args__ = (
+        UniqueConstraint("token_hash"),
+        CheckConstraint("purpose IN ('verify_email', 'reset_password')", name="purpose_supported"),
+        CheckConstraint("token_hash ~ '^[0-9a-f]{64}$'", name="token_hash_sha256"),
+        CheckConstraint("expires_at > created_at", name="expires_after_creation"),
+        CheckConstraint(
+            "NOT (consumed_at IS NOT NULL AND revoked_at IS NOT NULL)",
+            name="terminal_state_exclusive",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), ForeignKey("app_user.id", ondelete="CASCADE"), nullable=False
+    )
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TelegramLinkRequest(Base):
+    __tablename__ = "telegram_link_request"
+    __table_args__ = (
+        UniqueConstraint("token_hash"),
+        CheckConstraint("token_hash ~ '^[0-9a-f]{64}$'", name="token_hash_sha256"),
+        CheckConstraint(
+            "status IN ('pending_telegram', 'pending_web_confirmation', 'completed', 'cancelled')",
+            name="status_supported",
+        ),
+        CheckConstraint("expires_at > created_at", name="expires_after_creation"),
+        CheckConstraint(
+            "(status = 'pending_telegram' AND candidate_telegram_user_id IS NULL "
+            "AND completed_at IS NULL AND cancelled_at IS NULL) OR "
+            "(status = 'pending_web_confirmation' AND candidate_telegram_user_id IS NOT NULL "
+            "AND completed_at IS NULL AND cancelled_at IS NULL) OR "
+            "(status = 'completed' AND candidate_telegram_user_id IS NOT NULL "
+            "AND completed_at IS NOT NULL AND cancelled_at IS NULL) OR "
+            "(status = 'cancelled' AND completed_at IS NULL AND cancelled_at IS NOT NULL)",
+            name="state_consistent",
+        ),
+        Index("ix_telegram_link_request_user_created", "user_id", "created_at"),
+        Index(
+            "uq_telegram_link_request_user_pending",
+            "user_id",
+            unique=True,
+            postgresql_where=text(
+                "status IN ('pending_telegram', 'pending_web_confirmation')"
+            ),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), ForeignKey("app_user.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    candidate_telegram_user_id: Mapped[str | None] = mapped_column(String(255))
+    candidate_username: Mapped[str | None] = mapped_column(String(255))
+    candidate_display_name: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+Index(
+    "uq_external_identity_user_telegram",
+    ExternalIdentity.user_id,
+    unique=True,
+    postgresql_where=ExternalIdentity.provider == "telegram",
+)
+
+
 class Exercise(Base):
     __tablename__ = "exercise"
     __table_args__ = (

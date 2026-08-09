@@ -10,29 +10,20 @@ from app.backend import BackendClient, BackendError
 
 
 def _response(status_code: int) -> httpx.Response:
-    return httpx.Response(
-        status_code,
-        json={
-            "user_id": str(uuid4()),
-            "locale": "it-IT",
-            "timezone": "Europe/Rome",
-            "preferred_load_unit": "kg",
-        },
-    )
+    return httpx.Response(status_code, json={"kind": "linked", "user_id": None})
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("status_code", "created"), [(201, True), (200, False)])
-async def test_registration_contract(status_code: int, created: bool) -> None:
+async def test_telegram_resolution_contract() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/internal/identities/telegram"
+        assert request.url.path == "/internal/telegram-connections/resolve"
         assert request.headers["Authorization"] == "Bearer internal-secret"
         assert json.loads(request.content) == {
             "telegram_user_id": 12345,
             "username": "first_name",
             "display_name": "First User",
         }
-        return _response(status_code)
+        return _response(200)
 
     client = BackendClient(
         base_url="http://api:8000/",
@@ -40,12 +31,12 @@ async def test_registration_contract(status_code: int, created: bool) -> None:
         transport=httpx.MockTransport(handler),
     )
     try:
-        result = await client.register_telegram_user(
+        result = await client.resolve_telegram_connection(
             telegram_user_id=12345,
             username="first_name",
             display_name="First User",
         )
-        assert result.created is created
+        assert result.kind == "linked"
     finally:
         await client.close()
 
@@ -54,14 +45,19 @@ async def test_registration_contract(status_code: int, created: bool) -> None:
 @pytest.mark.parametrize(
     ("handler", "cause_type"),
     [
-        (lambda request: httpx.Response(503), httpx.HTTPStatusError),
+        (
+            lambda request: httpx.Response(
+                503, json={"detail": {"code": "unavailable", "message": "down"}}
+            ),
+            BackendError,
+        ),
         (
             lambda request: httpx.Response(200, json={"unexpected": "body"}),
             ValidationError,
         ),
     ],
 )
-async def test_registration_rejects_backend_and_protocol_errors(
+async def test_resolution_rejects_backend_and_protocol_errors(
     handler, cause_type
 ) -> None:
     client = BackendClient(
@@ -71,18 +67,21 @@ async def test_registration_rejects_backend_and_protocol_errors(
     )
     try:
         with pytest.raises(BackendError) as captured:
-            await client.register_telegram_user(
+            await client.resolve_telegram_connection(
                 telegram_user_id=12345,
                 username=None,
                 display_name=None,
             )
-        assert isinstance(captured.value.__cause__, cause_type)
+        if cause_type is BackendError:
+            assert captured.value.code == "unavailable"
+        else:
+            assert isinstance(captured.value.__cause__, cause_type)
     finally:
         await client.close()
 
 
 @pytest.mark.asyncio
-async def test_registration_wraps_timeouts() -> None:
+async def test_resolution_wraps_timeouts() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("timed out", request=request)
 
@@ -93,7 +92,7 @@ async def test_registration_wraps_timeouts() -> None:
     )
     try:
         with pytest.raises(BackendError):
-            await client.register_telegram_user(
+            await client.resolve_telegram_connection(
                 telegram_user_id=12345,
                 username=None,
                 display_name=None,
@@ -181,7 +180,7 @@ async def test_backend_requests_use_a_total_twelve_second_deadline(monkeypatch) 
         transport=httpx.MockTransport(lambda request: _response(200)),
     )
     try:
-        await client.register_telegram_user(
+        await client.resolve_telegram_connection(
             telegram_user_id=12345,
             username=None,
             display_name=None,

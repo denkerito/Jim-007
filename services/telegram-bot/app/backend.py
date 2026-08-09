@@ -19,19 +19,16 @@ class BackendError(RuntimeError):
         self.code = code
 
 
-class _RegistrationResponse(BaseModel):
+class _TelegramInternalResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    user_id: UUID
-    locale: str
-    timezone: str
-    preferred_load_unit: str
+    kind: Literal["linked", "unlinked", "candidate_recorded"]
+    user_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class RegistrationResult:
-    user_id: UUID
-    created: bool
+class TelegramConnectionResult:
+    kind: Literal["linked", "unlinked", "candidate_recorded"]
 
 
 class _LoadResponse(BaseModel):
@@ -316,33 +313,50 @@ class BackendClient:
             raise BackendError(rejected_message, code=code)
         return response, body
 
-    async def register_telegram_user(
+    async def resolve_telegram_connection(
         self,
         *,
         telegram_user_id: int,
         username: str | None,
         display_name: str | None,
-    ) -> RegistrationResult:
+    ) -> TelegramConnectionResult:
         payload: dict[str, Any] = {
             "telegram_user_id": telegram_user_id,
             "username": username,
             "display_name": display_name,
         }
-        response, body = await self._post_json(
-            "/internal/identities/telegram",
+        _, body = await self._post_json(
+            "/internal/telegram-connections/resolve",
             payload=payload,
-            failure_message="Backend registration failed",
+            failure_message="Backend Telegram resolution failed",
+            rejected_message="Backend rejected Telegram resolution",
         )
         try:
-            parsed = _RegistrationResponse.model_validate(body)
+            parsed = _TelegramInternalResponse.model_validate(body)
         except ValidationError as error:
-            raise BackendError("Backend registration failed") from error
-        if response.status_code not in (200, 201):
-            raise BackendError("Backend returned an unexpected registration status")
-        return RegistrationResult(
-            user_id=parsed.user_id,
-            created=response.status_code == 201,
+            raise BackendError("Backend Telegram resolution failed") from error
+        return TelegramConnectionResult(kind=parsed.kind)
+
+    async def claim_telegram_link(
+        self, *, token: str, telegram_user_id: int, update_id: int,
+        username: str | None, display_name: str | None,
+    ) -> TelegramConnectionResult:
+        payload = {
+            "token": token, "telegram_user_id": telegram_user_id,
+            "username": username, "display_name": display_name,
+        }
+        _, body = await self._post_json(
+            "/internal/telegram-link-requests/claim",
+            payload=payload,
+            headers={"Idempotency-Key": f"telegram:update:{update_id}"},
+            failure_message="Backend Telegram link failed",
+            rejected_message="Backend rejected Telegram link",
         )
+        try:
+            parsed = _TelegramInternalResponse.model_validate(body)
+        except ValidationError as error:
+            raise BackendError("Backend Telegram link failed") from error
+        return TelegramConnectionResult(kind=parsed.kind)
 
     async def process_workout_event(
         self,

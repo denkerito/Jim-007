@@ -9,7 +9,7 @@ from app.domain.exceptions import (
     ActiveWorkoutExistsError,
     ConflictError,
     DomainError,
-    ExternalIdentityNotRegisteredError,
+    TelegramNotLinkedError,
     InvalidHistoryCursorError,
     LlmInvalidResponseError,
     LlmTimeoutError,
@@ -54,15 +54,15 @@ def install_error_handlers(app: FastAPI) -> None:
             content={"detail": {"code": "llm_unavailable", "message": str(error)}},
         )
 
-    @app.exception_handler(ExternalIdentityNotRegisteredError)
-    async def external_identity_not_registered(
-        _: Request, error: ExternalIdentityNotRegisteredError
+    @app.exception_handler(TelegramNotLinkedError)
+    async def telegram_not_linked(
+        _: Request, error: TelegramNotLinkedError
     ) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
             content={
                 "detail": {
-                    "code": "external_identity_not_registered",
+                    "code": "telegram_not_linked",
                     "message": str(error),
                 }
             },

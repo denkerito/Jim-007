@@ -14,7 +14,7 @@ from app.backend import BackendClient, BackendError
 
 pytestmark = pytest.mark.contract
 
-MANIFEST_PATH = Path(__file__).parents[3] / "contracts" / "internal-api" / "v1" / "interactions.json"
+MANIFEST_PATH = Path(__file__).parents[3] / "contracts" / "internal-api" / "v2" / "interactions.json"
 
 
 def _manifest() -> dict[str, Any]:
@@ -37,8 +37,10 @@ def _manifest() -> dict[str, Any]:
 async def _invoke(client: BackendClient, interaction: dict[str, Any]):
     operation = interaction["operation"]
     arguments = interaction["arguments"]
-    if operation == "registration":
-        return await client.register_telegram_user(**arguments)
+    if operation == "telegram_resolve":
+        return await client.resolve_telegram_connection(**arguments)
+    if operation == "telegram_claim":
+        return await client.claim_telegram_link(**arguments)
     if operation == "workout_event":
         return await client.process_workout_event(**arguments)
     if operation == "program_event":

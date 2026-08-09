@@ -34,7 +34,7 @@ async def _close_backend(application: Application) -> None:
 async def _set_bot_commands(application: Application) -> None:
     await application.bot.set_my_commands(
         (
-            BotCommand("start", "Registra il profilo"),
+            BotCommand("start", "Verifica il collegamento web"),
             BotCommand("workout", "Apri un workout"),
             BotCommand("status", "Mostra il workout aperto"),
             BotCommand("undo", "Annulla l'ultimo inserimento"),
@@ -71,6 +71,7 @@ def main() -> None:
         .build()
     )
     application.bot_data[BACKEND_CLIENT_KEY] = backend
+    application.bot_data["public_web_url"] = settings.public_web_url
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("workout", open_workout))
     application.add_handler(CommandHandler("status", workout_status))

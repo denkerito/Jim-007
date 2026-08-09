@@ -7,16 +7,19 @@ Il progetto usa un monorepo con servizi separati e immagini Docker indipendenti:
 - `telegram-bot`: adapter sottile verso Telegram;
 - `api`: backend FastAPI e unica autorita sulla business logic;
 - `db`: database PostgreSQL.
+- `web`: applicazione React servita da Nginx sulla stessa origin dell'API pubblica;
+- `mailpit`: SMTP e inbox locale per i flussi email di sviluppo.
 
 Il flusso applicativo previsto e:
 
 ```text
-Telegram -> Telegram Bot -> HTTP -> FastAPI -> PostgreSQL
-                                      |
-                                      +-> API del provider LLM
+Browser -> Nginx -> FastAPI -> PostgreSQL
+                       ^  |
+                       |  +-> SMTP / provider LLM
+Telegram -> Bot --------+
 ```
 
-Il bot non accede direttamente al database e non contiene logica di dominio. Comunica con FastAPI attraverso un contratto HTTP e un token interno. FastAPI e inoltre il backend della futura web application.
+Il bot non accede direttamente al database e non contiene logica di dominio. Comunica con FastAPI attraverso un contratto HTTP e un token interno. Il browser raggiunge solo `/api/*` tramite Nginx; `/internal/*` non viene inoltrato.
 
 I messaggi workout usano `POST /internal/workout-events`. Il bot traduce
 `/workout`, testo libero, `/end`, `/cancel` e `/undo` nelle azioni `open`, `log`,
@@ -36,10 +39,15 @@ Tutte le occorrenze create dallo stesso messaggio condividono un `log_batch_id`.
 fisicamente il draft e i suoi figli, conservando catalogo personale e claim
 idempotenti. Il replay dello stesso `/cancel` rimane valido anche senza la risorsa.
 
-Il comando Telegram `/start`, accettato solo in chat privata, registra o risolve
-l'identita esterna tramite `POST /internal/identities/telegram`. FastAPI usa la
-coppia stabile `(provider, provider_subject)` per collegarla a un utente applicativo
-e aggiorna soltanto i metadati descrittivi Telegram nelle registrazioni successive.
+Solo `POST /api/auth/register` crea `app_user`. Il comando Telegram `/start`,
+accettato solo in chat privata, risolve una connessione esistente oppure presenta la
+CTA alla web app. Un payload `link_<token>` effettua una claim su
+`POST /internal/telegram-link-requests/claim`: salva il candidato, ma non crea
+`external_identity`. La connessione nasce esclusivamente dopo la conferma web.
+
+Le credenziali usano Argon2id e le sessioni sono server-side: il browser conserva
+solo un cookie HttpOnly. Token sessione, verifica email, reset e linking sono salvati
+come SHA-256. Le mutazioni autenticate richiedono Origin valido e token CSRF.
 
 Le giornate programmate sono gestite dai comandi `/program`, `/editprogram` e
 `/newprogram` tramite `POST /internal/program-events`. Una giornata contiene una
@@ -101,7 +109,7 @@ FastAPI espone una liveness probe indipendente dal database e una readiness prob
 ## Contratto API interno
 
 Il contratto HTTP consumato dal bot Telegram e versionato in
-`contracts/internal-api/v1`. Lo snapshot OpenAPI contiene soltanto i cinque endpoint
+`contracts/internal-api/v2`; `v1` resta un archivio senza compatibilita runtime. Lo snapshot OpenAPI contiene gli endpoint
 interni usati dal bot, mentre il manifest delle interazioni contiene esempi validati
 sia dai modelli FastAPI sia dal client HTTP reale del bot.
 

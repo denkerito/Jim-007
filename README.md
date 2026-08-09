@@ -6,11 +6,12 @@ JIM007 turns natural-language training notes into structured workout data. Open 
 
 The LLM is only an interpreter: it never accesses the database, and every generated payload is checked by the application before it is persisted.
 
-> **Project status:** the Telegram MVP is implemented. A web dashboard for progress and statistics is planned but is not part of the repository yet.
+> **Project status:** web-first authentication and secure Telegram linking are implemented. The progress/history dashboard remains a later iteration.
 
 ## Features
 
-- Register users directly from a private Telegram chat
+- Register and verify a web account with email and password
+- Link exactly one Telegram account through an expiring, two-step confirmation flow
 - Log one or more exercises from natural-language messages
 - Keep workouts as drafts until they are explicitly completed
 - Inspect, undo the last entry, or cancel an active workout
@@ -24,18 +25,17 @@ The LLM is only an interpreter: it never accesses the database, and every genera
 ## How it works
 
 ```text
-Telegram
-   |
-   v
-Telegram bot ---- HTTP ----> FastAPI ----> PostgreSQL
-                                |
-                                +---------> Gemini API
+Browser ---- Nginx ----> FastAPI ----> PostgreSQL
+                           ^  |
+                           |  +---------> SMTP / Gemini API
+Telegram ---- Bot ----------+
 ```
 
-The repository is a Python monorepo containing two independently deployable services:
+The repository contains three independently deployable application services:
 
 - `services/telegram-bot` — a thin Telegram adapter built with `python-telegram-bot`
 - `services/api` — the FastAPI backend, domain logic, database access, migrations, and Gemini adapter
+- `services/web` — the Vite/React account application, served by Nginx
 
 The backend uses layered boundaries (`domain`, `application`, `infrastructure`, and `api`). The bot communicates with it through an authenticated internal API; it does not connect to PostgreSQL or Gemini directly.
 
@@ -48,6 +48,7 @@ The backend uses layered boundaries (`domain`, `application`, `infrastructure`, 
 - Google Gemini Developer API
 - Docker Compose
 - pytest and Testcontainers
+- React 19, TypeScript, TanStack Query, Tailwind and Vitest
 
 ## Getting started
 
@@ -74,7 +75,10 @@ Set at least these values in `.env`:
 ```dotenv
 POSTGRES_PASSWORD=choose-a-strong-password
 INTERNAL_API_TOKEN=choose-a-long-random-token
+SESSION_SECRET=choose-an-independent-long-random-secret
+CSRF_SECRET=choose-a-different-long-random-secret
 TELEGRAM_BOT_TOKEN=your-telegram-bot-token
+TELEGRAM_BOT_USERNAME=your-bot-username-without-at
 GEMINI_API_KEY=your-gemini-api-key
 ```
 
@@ -86,7 +90,9 @@ Do not commit `.env`; it contains secrets and is ignored by Git.
 docker compose up --build
 ```
 
-Compose starts PostgreSQL, applies all Alembic migrations, waits for the API to become ready, and then starts the bot in polling mode.
+Compose starts PostgreSQL, applies all Alembic migrations, starts Mailpit and the API, then starts the web app and bot.
+
+Open the application at `http://127.0.0.1:3000`. Development email is available in Mailpit at `http://127.0.0.1:8025`.
 
 The API is bound to `http://127.0.0.1:8000` by default:
 
@@ -96,7 +102,35 @@ The API is bound to `http://127.0.0.1:8000` by default:
 
 Change `API_PORT` in `.env` if port 8000 is already in use.
 
-### 3. Use the Telegram bot
+### Upgrading an existing development database
+
+Rows created by the former Telegram-first flow do not have a web credential and
+are deliberately not converted into placeholder accounts. For this development
+rollout the existing PostgreSQL data is considered disposable.
+
+After stopping Compose, first inspect the exact project volume:
+
+```bash
+docker compose down
+docker volume inspect jim007_postgres_data
+```
+
+Only after confirming that this is the disposable JIM007 development volume,
+remove that exact volume and start the stack again:
+
+```bash
+docker volume rm jim007_postgres_data
+docker compose up --build
+```
+
+This deletion is irreversible. It is not performed by the migration or by any
+application startup command.
+
+### 3. Create an account and link Telegram
+
+Register in the web app, open the verification link from Mailpit, then use **Collega Telegram** on `/account`. The bot records only a candidate identity; the connection becomes active only after explicit confirmation in the browser.
+
+Plain `/start` never creates an account. An unlinked user is sent back to the web app. After linking, try this flow:
 
 Open a private chat with your bot and try this flow:
 
@@ -116,7 +150,7 @@ An active workout remains a draft and is excluded from history until `/end` comp
 
 | Command | Purpose |
 | --- | --- |
-| `/start` | Register or refresh the Telegram identity |
+| `/start` | Resolve the current connection or accept a web-generated link token |
 | `/workout [date or program]` | Open a workout for a natural-language date or saved training day |
 | `/status` | Show the complete active draft |
 | `/undo` | Remove everything added by the most recent workout message |
@@ -157,11 +191,22 @@ python -m pip install -e ".[test]"
 pytest
 ```
 
+### Web app
+
+```bash
+cd services/web
+pnpm install
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
+```
+
 On Windows, activate a virtual environment with `.venv\\Scripts\\Activate.ps1`.
 
 ### Internal API contract
 
-The bot-facing OpenAPI snapshot and interaction examples live in `contracts/internal-api/v1`. Check both provider and consumer contracts with:
+The active bot-facing OpenAPI snapshot and interaction examples live in `contracts/internal-api/v2`; `v1` remains archived. Check both provider and consumer contracts with:
 
 ```bash
 cd services/api
@@ -181,7 +226,7 @@ python scripts/internal_api_contract.py --write
 
 ```text
 .
-|-- contracts/internal-api/v1/  # Versioned bot/API contract
+|-- contracts/internal-api/v2/  # Active bot/API contract
 |-- docs/                       # Architecture, domain, and product notes
 |-- services/
 |   |-- api/                    # FastAPI application and Alembic migrations
@@ -195,7 +240,7 @@ python scripts/internal_api_contract.py --write
 - [Architecture](docs/architecture.md)
 - [Database and domain model](docs/database.md)
 - [Product vision](docs/vision.md)
-- [Internal API contract](contracts/internal-api/v1/README.md)
+- [Internal API contract](contracts/internal-api/v2/README.md)
 
 ## Roadmap
 

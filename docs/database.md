@@ -15,7 +15,8 @@ Il database contiene dati applicativi strutturati. Il bot Telegram e il provider
 
 ### Incluso nell'MVP
 
-- registrazione di un utente tramite identita Telegram;
+- registrazione web con email verificata e sessioni server-side;
+- collegamento Telegram web-first con conferma esplicita;
 - profilo utente con locale, timezone e unita di peso preferita;
 - catalogo personale degli esercizi;
 - invio al LLM del catalogo personale, composto da qualche decina di esercizi;
@@ -48,7 +49,7 @@ Il database contiene dati applicativi strutturati. Il bot Telegram e il provider
 - catalogo globale/canonico degli esercizi;
 - set basati su durata, distanza, calorie, RPE o RIR;
 - tabelle persistenti per record e statistiche;
-- autenticazione della web application.
+- dashboard web di storico e statistiche.
 
 Queste esclusioni non eliminano la possibilita di aggiungere le funzionalita in seguito. Lo schema MVP mantiene identificatori e relazioni stabili che permettono migrazioni incrementali.
 
@@ -58,7 +59,11 @@ Queste esclusioni non eliminano la possibilita di aggiungere le funzionalita in 
 
 ```mermaid
 erDiagram
-    USER ||--o{ EXTERNAL_IDENTITY : "possiede"
+    USER ||--|| WEB_ACCOUNT : "autentica"
+    USER ||--o{ WEB_SESSION : "possiede"
+    USER ||--o{ AUTH_TOKEN : "riceve"
+    USER ||--o{ TELEGRAM_LINK_REQUEST : "avvia"
+    USER ||--o| EXTERNAL_IDENTITY : "collega"
     USER ||--o{ EXERCISE : "mantiene nel catalogo"
     USER ||--o{ WORKOUT : "registra"
     USER ||--o{ PROGRAM_WORKOUT : "programma"
@@ -109,7 +114,7 @@ Per Telegram:
 - `provider_subject` contiene il Telegram user ID stabile;
 - username e display name sono solo informazioni descrittive e possono cambiare.
 
-La coppia `(provider, provider_subject)` identifica univocamente una registrazione. Il dominio utente rimane cosi indipendente da Telegram e potra essere collegato in futuro a un'identita per la web application.
+La coppia `(provider, provider_subject)` identifica univocamente la connessione. Un indice parziale su `user_id` per il provider `telegram` impone anche il limite di un solo Telegram per utente. L'identita viene creata soltanto dopo claim Telegram e conferma web.
 
 ### 3.4 Exercise
 
@@ -296,9 +301,17 @@ Se il catalogo cresce, potra essere introdotta una tabella `exercise_name` per n
 
 Durata, distanza, calorie, RPE, RIR, assisted load e altre metriche richiederanno un'estensione esplicita del modello. Nell'MVP non viene usato un modello EAV generico, perche renderebbe vincoli e query piu difficili senza un requisito attuale.
 
-### 4.7 Autenticazione web
+### 4.7 Autenticazione web e linking
 
-L'autenticazione della web application verra progettata successivamente. `User` rimane indipendente dal canale e `ExternalIdentity` permette di collegare in futuro una nuova identita allo stesso utente.
+`web_account` contiene email originale, email normalizzata univoca, hash Argon2id,
+verifica e stato dei tentativi di login. `web_session` conserva soltanto l'hash del
+bearer opaco e la sua scadenza/revoca. `auth_token` applica lo stesso schema one-time
+hashato a verifica email e reset password.
+
+`telegram_link_request` modella `pending_telegram -> pending_web_confirmation ->
+completed`, con uscite terminali `expired` e `cancelled`. Token e richieste sono
+one-time; lock transazionali e vincoli univoci impediscono spostamenti o merge
+impliciti tra account.
 
 ## 5. Schema relazionale PostgreSQL dell'MVP
 
@@ -313,6 +326,19 @@ L'autenticazione della web application verra progettata successivamente. `User` 
 - tutti i testi obbligatori devono risultare non vuoti dopo il trim.
 
 ### 5.2 `app_user`
+
+Prima delle tabelle di allenamento, l'autenticazione aggiunge:
+
+| Tabella | Responsabilita | Vincoli principali |
+|---|---|---|
+| `web_account` | credenziale primaria email/password | PK/FK `user_id`, email normalizzata univoca |
+| `web_session` | sessione browser revocabile | solo hash SHA-256 del token, scadenza assoluta |
+| `auth_token` | verifica email e reset password | purpose esplicito, consumo/revoca one-time |
+| `telegram_link_request` | handshake web -> bot -> web | una richiesta pendente per utente, candidato e stati terminali |
+
+I token in chiaro esistono solo nella risposta o nell'email che li trasporta e non
+sono mai persistiti. Le foreign key verso `app_user` usano cascade perche questi
+record non hanno significato fuori dall'account.
 
 | Colonna | Tipo | Null | Default | Descrizione |
 |---|---|---:|---|---|

@@ -9,12 +9,40 @@ class NotFoundError(DomainError):
     """A requested entity does not exist or is not owned by the caller."""
 
 
-class ExternalIdentityNotRegisteredError(NotFoundError):
-    """A chat provider identity has not completed registration."""
-
-
 class ConflictError(DomainError):
     """The requested operation conflicts with current state."""
+
+
+class TelegramNotLinkedError(NotFoundError):
+    """The Telegram identity is not linked to a web account."""
+
+
+class InvalidAuthTokenError(DomainError):
+    """An authentication token is invalid, expired, or already used."""
+
+
+class InvalidCredentialsError(DomainError):
+    """The supplied login credentials are invalid."""
+
+
+class EmailNotVerifiedError(DomainError):
+    """The account email has not been verified."""
+
+
+class TelegramLinkNotFoundError(NotFoundError):
+    """The Telegram link request does not exist."""
+
+
+class TelegramLinkInvalidError(DomainError):
+    """The Telegram link request is invalid or expired."""
+
+
+class TelegramAlreadyLinkedError(ConflictError):
+    """The Telegram identity is already linked to another account."""
+
+
+class UserAlreadyHasTelegramError(ConflictError):
+    """The web account already has a Telegram connection."""
 
 
 class ActiveWorkoutExistsError(ConflictError):

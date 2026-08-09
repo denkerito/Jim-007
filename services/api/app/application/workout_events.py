@@ -31,7 +31,7 @@ from app.application.services import (
 )
 from app.domain.exceptions import (
     ActiveWorkoutExistsError,
-    ExternalIdentityNotRegisteredError,
+    TelegramNotLinkedError,
     NoActiveWorkoutError,
     NotFoundError,
     LlmInvalidResponseError,
@@ -54,8 +54,8 @@ class ProcessWorkoutEvent:
                 command.provider.strip(), command.provider_subject.strip()
             )
             if identity is None:
-                raise ExternalIdentityNotRegisteredError(
-                    "External identity is not registered"
+                raise TelegramNotLinkedError(
+                    "Telegram is not linked to a web account"
                 )
             user = await uow.users.get_by_id(identity.user_id)
             if user is None:

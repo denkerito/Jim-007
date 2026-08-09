@@ -70,27 +70,16 @@ def _headers(key: str) -> dict[str, str]:
 
 
 @pytest.mark.asyncio
-async def test_telegram_workout_event_flow_and_replay(session_factory) -> None:
+async def test_telegram_workout_event_flow_and_replay(session_factory, telegram_identity_factory) -> None:
     interpreter = FakeInterpreter()
     app.dependency_overrides[get_uow_factory] = lambda: lambda: SqlAlchemyUnitOfWork(
         session_factory
     )
     app.dependency_overrides[get_workout_text_interpreter] = lambda: interpreter
     transport = ASGITransport(app=app)
+    await telegram_identity_factory(12345)
     try:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            identity = {
-                "telegram_user_id": 12345,
-                "username": "gym_user",
-                "display_name": "Gym User",
-            }
-            registered = await client.post(
-                "/internal/identities/telegram",
-                headers={"Authorization": "Bearer integration-secret"},
-                json=identity,
-            )
-            assert registered.status_code == 201
-
             base = {"provider": "telegram", "provider_subject": "12345"}
             opened = await client.post(
                 "/internal/workout-events",
@@ -134,7 +123,7 @@ async def test_telegram_workout_event_flow_and_replay(session_factory) -> None:
 
 @pytest.mark.asyncio
 async def test_clarification_and_atomic_invalid_catalog_id_write_nothing(
-    session_factory,
+    session_factory, telegram_identity_factory,
 ) -> None:
     interpreter = FakeInterpreter()
     app.dependency_overrides[get_uow_factory] = lambda: lambda: SqlAlchemyUnitOfWork(
@@ -142,13 +131,9 @@ async def test_clarification_and_atomic_invalid_catalog_id_write_nothing(
     )
     app.dependency_overrides[get_workout_text_interpreter] = lambda: interpreter
     transport = ASGITransport(app=app)
+    await telegram_identity_factory(98765)
     try:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            await client.post(
-                "/internal/identities/telegram",
-                headers={"Authorization": "Bearer integration-secret"},
-                json={"telegram_user_id": 98765},
-            )
             base = {"provider": "telegram", "provider_subject": "98765"}
             await client.post(
                 "/internal/workout-events",
@@ -198,20 +183,16 @@ async def test_clarification_and_atomic_invalid_catalog_id_write_nothing(
 
 
 @pytest.mark.asyncio
-async def test_status_undo_batches_and_permanent_cancel(session_factory) -> None:
+async def test_status_undo_batches_and_permanent_cancel(session_factory, telegram_identity_factory) -> None:
     interpreter = FakeInterpreter()
     app.dependency_overrides[get_uow_factory] = lambda: lambda: SqlAlchemyUnitOfWork(
         session_factory
     )
     app.dependency_overrides[get_workout_text_interpreter] = lambda: interpreter
     transport = ASGITransport(app=app)
+    await telegram_identity_factory(22222)
     try:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            await client.post(
-                "/internal/identities/telegram",
-                headers={"Authorization": "Bearer integration-secret"},
-                json={"telegram_user_id": 22222},
-            )
             base = {"provider": "telegram", "provider_subject": "22222"}
 
             no_status = await client.post(
@@ -364,7 +345,7 @@ async def test_status_undo_batches_and_permanent_cancel(session_factory) -> None
 
 @pytest.mark.asyncio
 async def test_concurrent_cancel_is_serialized_and_leaves_one_claim(
-    session_factory,
+    session_factory, telegram_identity_factory,
 ) -> None:
     interpreter = FakeInterpreter()
     app.dependency_overrides[get_uow_factory] = lambda: lambda: SqlAlchemyUnitOfWork(
@@ -372,13 +353,9 @@ async def test_concurrent_cancel_is_serialized_and_leaves_one_claim(
     )
     app.dependency_overrides[get_workout_text_interpreter] = lambda: interpreter
     transport = ASGITransport(app=app)
+    await telegram_identity_factory(33333)
     try:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            await client.post(
-                "/internal/identities/telegram",
-                headers={"Authorization": "Bearer integration-secret"},
-                json={"telegram_user_id": 33333},
-            )
             base = {"provider": "telegram", "provider_subject": "33333"}
             await client.post(
                 "/internal/workout-events",

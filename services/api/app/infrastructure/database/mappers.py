@@ -1,6 +1,7 @@
 """Explicit conversion from persistence models to immutable domain models."""
 
 from app.domain.models import (
+    AuthToken,
     Exercise,
     ExternalIdentity,
     Load,
@@ -8,7 +9,10 @@ from app.domain.models import (
     PerformedSet,
     ProgramWorkout,
     ProgramWorkoutItem,
+    TelegramLinkRequest,
     User,
+    WebAccount,
+    WebSession,
     Workout,
     WorkoutExercise,
     WorkoutStatus,
@@ -47,6 +51,22 @@ def to_external_identity(model: orm.ExternalIdentity) -> ExternalIdentity:
         display_name=model.display_name,
         created_at=model.created_at,
     )
+
+
+def to_web_account(model: orm.WebAccount) -> WebAccount:
+    return WebAccount.model_validate(model, from_attributes=True)
+
+
+def to_web_session(model: orm.WebSession) -> WebSession:
+    return WebSession.model_validate(model, from_attributes=True)
+
+
+def to_auth_token(model: orm.AuthToken) -> AuthToken:
+    return AuthToken.model_validate(model, from_attributes=True)
+
+
+def to_telegram_link_request(model: orm.TelegramLinkRequest) -> TelegramLinkRequest:
+    return TelegramLinkRequest.model_validate(model, from_attributes=True)
 
 
 def to_program_workout(model: orm.ProgramWorkout) -> ProgramWorkout:
@@ -114,3 +134,6 @@ def to_workout(model: orm.Workout) -> Workout:
         ),
         exercises=tuple(to_workout_exercise(item) for item in model.exercises),
     )
+    TelegramLinkRequest,
+    WebAccount,
+    WebSession,

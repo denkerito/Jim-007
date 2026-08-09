@@ -1,18 +1,19 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Request, status
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.errors import install_error_handlers
 from app.api.exercises import router as exercises_router
 from app.api.history_queries import router as history_queries_router
-from app.api.identities import router as identities_router
 from app.api.workout_events import router as workout_events_router
 from app.api.workout_status import router as workout_status_router
 from app.api.workouts import router as workouts_router
 from app.api.program_events import router as program_events_router
+from app.api.web_auth import router as web_auth_router
+from app.api.telegram_links import router as telegram_links_router, internal_router as telegram_links_internal_router
 from app.config import get_settings
 from app.infrastructure.database.session import engine
 from app.infrastructure.llm import GeminiWorkoutTextInterpreter
@@ -43,14 +44,26 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="JIM007 API", version="0.1.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def auth_responses_are_not_cached(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/auth/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 install_error_handlers(app)
-app.include_router(identities_router)
 app.include_router(exercises_router)
 app.include_router(history_queries_router)
 app.include_router(workouts_router)
 app.include_router(workout_events_router)
 app.include_router(workout_status_router)
 app.include_router(program_events_router)
+app.include_router(web_auth_router)
+app.include_router(telegram_links_router)
+app.include_router(telegram_links_internal_router)
 
 
 @app.get("/health/live", tags=["system"])

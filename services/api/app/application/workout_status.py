@@ -2,7 +2,7 @@
 
 from app.application.commands import GetWorkoutStatusCommand, WorkoutStatusResult
 from app.application.ports import UnitOfWorkFactory
-from app.domain.exceptions import ExternalIdentityNotRegisteredError
+from app.domain.exceptions import TelegramNotLinkedError
 
 
 class GetWorkoutStatus:
@@ -15,8 +15,8 @@ class GetWorkoutStatus:
                 command.provider.strip(), command.provider_subject.strip()
             )
             if identity is None:
-                raise ExternalIdentityNotRegisteredError(
-                    "External identity is not registered"
+                raise TelegramNotLinkedError(
+                    "Telegram is not linked to a web account"
                 )
             workout = await uow.workouts.get_active_draft(identity.user_id)
             if workout is None:

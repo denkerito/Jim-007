@@ -1,0 +1,78 @@
+{
+  "version": 2,
+  "fixtures": {},
+  "interactions": [
+    {
+      "id": "telegram-resolve-linked",
+      "operation": "telegram_resolve",
+      "arguments": {"telegram_user_id": 12345, "username": "jim", "display_name": "Jim"},
+      "request": {"path": "/internal/telegram-connections/resolve", "body": {"telegram_user_id": 12345, "username": "jim", "display_name": "Jim"}, "idempotency_key": null},
+      "status": 200,
+      "response": {"kind": "linked", "user_id": "00000000-0000-0000-0000-000000000001"},
+      "expected_kind": "linked"
+    },
+    {
+      "id": "telegram-resolve-unlinked",
+      "operation": "telegram_resolve",
+      "arguments": {"telegram_user_id": 12345, "username": null, "display_name": null},
+      "request": {"path": "/internal/telegram-connections/resolve", "body": {"telegram_user_id": 12345, "username": null, "display_name": null}, "idempotency_key": null},
+      "status": 200,
+      "response": {"kind": "unlinked", "user_id": null},
+      "expected_kind": "unlinked"
+    },
+    {
+      "id": "telegram-link-candidate",
+      "operation": "telegram_claim",
+      "arguments": {"token": "abcdefghijklmnopqrstuvwxyz1234567890ABCDEFG", "telegram_user_id": 12345, "update_id": 99, "username": "jim", "display_name": "Jim"},
+      "request": {"path": "/internal/telegram-link-requests/claim", "body": {"token": "abcdefghijklmnopqrstuvwxyz1234567890ABCDEFG", "telegram_user_id": 12345, "username": "jim", "display_name": "Jim"}, "idempotency_key": "telegram:update:99"},
+      "status": 200,
+      "response": {"kind": "candidate_recorded", "user_id": null},
+      "expected_kind": "candidate_recorded"
+    },
+    {
+      "id": "workout-needs-clarification",
+      "operation": "workout_event",
+      "arguments": {"telegram_user_id": 12345, "update_id": 101, "action": "log", "text": "panca"},
+      "request": {"path": "/internal/workout-events", "body": {"provider": "telegram", "provider_subject": "12345", "action": "log", "text": "panca"}, "idempotency_key": "telegram:update:101"},
+      "status": 200,
+      "response": {"kind": "needs_clarification", "clarification_message": "Quale variante?"},
+      "expected_kind": "needs_clarification"
+    },
+    {
+      "id": "program-reset",
+      "operation": "program_event",
+      "arguments": {"telegram_user_id": 12345, "update_id": 201, "action": "new"},
+      "request": {"path": "/internal/program-events", "body": {"provider": "telegram", "provider_subject": "12345", "action": "new"}, "idempotency_key": "telegram:update:201"},
+      "status": 200,
+      "response": {"kind": "reset", "replayed": false, "deactivated_count": 2},
+      "expected_kind": "reset"
+    },
+    {
+      "id": "status-none",
+      "operation": "status",
+      "arguments": {"telegram_user_id": 12345},
+      "request": {"path": "/internal/workout-status", "body": {"provider": "telegram", "provider_subject": "12345"}, "idempotency_key": null},
+      "status": 200,
+      "response": {"kind": "none"},
+      "expected_kind": "none"
+    },
+    {
+      "id": "history-empty",
+      "operation": "history",
+      "arguments": {"telegram_user_id": 12345, "kind": "workouts", "query": null, "limit": 5},
+      "request": {"path": "/internal/history-queries", "body": {"provider": "telegram", "provider_subject": "12345", "kind": "workouts", "limit": 5}, "idempotency_key": null},
+      "status": 200,
+      "response": {"kind": "workouts", "items": []},
+      "expected_kind": "workouts"
+    },
+    {
+      "id": "workout-telegram-not-linked",
+      "operation": "workout_event",
+      "arguments": {"telegram_user_id": 54321, "update_id": 301, "action": "log", "text": "panca 80x8"},
+      "request": {"path": "/internal/workout-events", "body": {"provider": "telegram", "provider_subject": "54321", "action": "log", "text": "panca 80x8"}, "idempotency_key": "telegram:update:301"},
+      "status": 404,
+      "response": {"detail": {"code": "telegram_not_linked", "message": "Connect Telegram from the web app"}},
+      "expected_error_code": "telegram_not_linked"
+    }
+  ]
+}

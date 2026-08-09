@@ -52,20 +52,15 @@ def _headers(key: str | None = None) -> dict[str, str]:
 
 
 @pytest.mark.asyncio
-async def test_program_workout_lifecycle_and_last_exercise(session_factory) -> None:
+async def test_program_workout_lifecycle_and_last_exercise(session_factory, telegram_identity_factory) -> None:
     interpreter = ProgramInterpreter()
     app.dependency_overrides[get_uow_factory] = lambda: lambda: SqlAlchemyUnitOfWork(session_factory)
     app.dependency_overrides[get_workout_text_interpreter] = lambda: interpreter
     transport = ASGITransport(app=app)
     base = {"provider": "telegram", "provider_subject": "99123"}
+    await telegram_identity_factory(99123)
     try:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            registration = await client.post(
-                "/internal/identities/telegram", headers=_headers(),
-                json={"telegram_user_id": 99123},
-            )
-            assert registration.status_code == 201
-
             created = await client.post(
                 "/internal/program-events", headers=_headers("program:create:1"),
                 json={**base, "action": "create", "day_number": 1, "alias": "push", "text": "panca 3x6 180s spinte 2x8 120s", "notes": "Forza"},

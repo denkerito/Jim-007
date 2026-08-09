@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -23,6 +23,7 @@ from app.application.commands import (
     ProgramExerciseResolutionInput,
 )
 from app.domain.models import (
+    AuthToken,
     Exercise,
     ExternalIdentity,
     Load,
@@ -31,6 +32,9 @@ from app.domain.models import (
     Workout,
     WorkoutExercise,
     ProgramWorkout,
+    TelegramLinkRequest,
+    WebAccount,
+    WebSession,
 )
 
 
@@ -65,6 +69,10 @@ class ExternalIdentityRepository(Protocol):
         self, provider: str, provider_subject: str
     ) -> ExternalIdentity | None: ...
 
+    async def get_by_user_provider(
+        self, user_id: UUID, provider: str
+    ) -> ExternalIdentity | None: ...
+
     async def create(
         self,
         *,
@@ -83,6 +91,62 @@ class ExternalIdentityRepository(Protocol):
         username: str | None,
         display_name: str | None,
     ) -> ExternalIdentity: ...
+
+    async def delete(self, identity_id: UUID) -> None: ...
+
+
+class WebAccountRepository(Protocol):
+    async def acquire_email_lock(self, normalized_email: str) -> None: ...
+
+    async def get_by_user_id(self, user_id: UUID) -> WebAccount | None: ...
+    async def get_by_normalized_email(self, normalized_email: str) -> WebAccount | None: ...
+    async def create(
+        self, *, user_id: UUID, email: str, normalized_email: str, password_hash: str
+    ) -> WebAccount: ...
+    async def verify_email(self, user_id: UUID, verified_at: datetime) -> WebAccount: ...
+    async def update_password(self, user_id: UUID, password_hash: str) -> WebAccount: ...
+    async def record_login_failure(
+        self, user_id: UUID, *, failed_count: int, locked_until: datetime | None
+    ) -> None: ...
+    async def clear_login_failures(self, user_id: UUID) -> None: ...
+
+
+class WebSessionRepository(Protocol):
+    async def create(
+        self, *, session_id: UUID, user_id: UUID, token_hash: str,
+        created_at: datetime, expires_at: datetime
+    ) -> WebSession: ...
+    async def get_active_by_hash(self, token_hash: str, now: datetime) -> WebSession | None: ...
+    async def revoke_by_hash(self, token_hash: str, revoked_at: datetime) -> None: ...
+    async def revoke_all_for_user(self, user_id: UUID, revoked_at: datetime) -> None: ...
+
+
+class AuthTokenRepository(Protocol):
+    async def revoke_active(self, user_id: UUID, purpose: str, revoked_at: datetime) -> None: ...
+    async def create(
+        self, *, token_id: UUID, user_id: UUID, purpose: str, token_hash: str,
+        created_at: datetime, expires_at: datetime
+    ) -> AuthToken: ...
+    async def get_for_update(self, token_hash: str) -> AuthToken | None: ...
+    async def consume(self, token_id: UUID, consumed_at: datetime) -> None: ...
+
+
+class TelegramLinkRequestRepository(Protocol):
+    async def acquire_user_lock(self, user_id: UUID) -> None: ...
+    async def revoke_pending_for_user(self, user_id: UUID, now: datetime) -> None: ...
+    async def create(
+        self, *, request_id: UUID, user_id: UUID, token_hash: str,
+        created_at: datetime, expires_at: datetime
+    ) -> TelegramLinkRequest: ...
+    async def get_by_id_for_user(self, request_id: UUID, user_id: UUID) -> TelegramLinkRequest | None: ...
+    async def get_by_id_for_update(self, request_id: UUID, user_id: UUID) -> TelegramLinkRequest | None: ...
+    async def get_by_hash_for_update(self, token_hash: str) -> TelegramLinkRequest | None: ...
+    async def set_candidate(
+        self, request_id: UUID, *, telegram_user_id: str,
+        username: str | None, display_name: str | None
+    ) -> TelegramLinkRequest: ...
+    async def complete(self, request_id: UUID, completed_at: datetime) -> TelegramLinkRequest: ...
+    async def cancel(self, request_id: UUID, cancelled_at: datetime) -> None: ...
 
 
 class ExerciseRepository(Protocol):
@@ -181,6 +245,10 @@ class ProcessedCommandRepository(Protocol):
 class UnitOfWork(Protocol):
     users: UserRepository
     external_identities: ExternalIdentityRepository
+    web_accounts: WebAccountRepository
+    web_sessions: WebSessionRepository
+    auth_tokens: AuthTokenRepository
+    telegram_link_requests: TelegramLinkRequestRepository
     exercises: ExerciseRepository
     workouts: WorkoutRepository
     program_workouts: ProgramWorkoutRepository

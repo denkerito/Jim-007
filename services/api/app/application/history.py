@@ -24,7 +24,7 @@ from app.application.ports import (
     UnitOfWorkFactory,
 )
 from app.domain.exceptions import (
-    ExternalIdentityNotRegisteredError,
+    TelegramNotLinkedError,
     InvalidHistoryCursorError,
     LlmInvalidResponseError,
     NotFoundError,
@@ -150,8 +150,8 @@ class ProcessHistoryQuery:
                 command.provider_subject.strip(),
             )
             if identity is None:
-                raise ExternalIdentityNotRegisteredError(
-                    "External identity is not registered"
+                raise TelegramNotLinkedError(
+                    "Telegram is not linked to a web account"
                 )
             user = await uow.users.get_by_id(identity.user_id)
             if user is None:

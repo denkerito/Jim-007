@@ -53,19 +53,6 @@ INTERNAL_LLM_ERROR_RESPONSES = {
 }
 
 
-class TelegramRegistrationRequest(ApiModel):
-    telegram_user_id: int = Field(gt=0, le=9_223_372_036_854_775_807)
-    username: str | None = Field(default=None, max_length=255)
-    display_name: str | None = Field(default=None, max_length=255)
-
-
-class UserRegistrationResponse(ApiModel):
-    user_id: UUID
-    locale: str
-    timezone: str
-    preferred_load_unit: domain.LoadUnit
-
-
 class CreateWorkoutRequest(ApiModel):
     performed_on: date | None = None
     notes: str | None = None

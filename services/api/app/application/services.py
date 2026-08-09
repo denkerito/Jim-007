@@ -16,8 +16,6 @@ from app.application.commands import (
     LogWorkoutMessageResult,
     NewExerciseReference,
     PerformedSetInput,
-    RegisterExternalIdentityCommand,
-    RegistrationResult,
     UndoWorkoutMessageCommand,
     UndoWorkoutMessageResult,
 )
@@ -48,55 +46,6 @@ def _clean_optional_text(value: str | None) -> str | None:
         return None
     cleaned = clean_required_text(value)
     return cleaned or None
-
-
-class RegisterExternalIdentity:
-    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
-        self._uow_factory = uow_factory
-
-    async def execute(
-        self, command: RegisterExternalIdentityCommand
-    ) -> RegistrationResult:
-        provider = clean_required_text(command.provider)
-        provider_subject = clean_required_text(command.provider_subject)
-        username = _clean_optional_text(command.username)
-        display_name = _clean_optional_text(command.display_name)
-
-        async with self._uow_factory() as uow:
-            await uow.external_identities.acquire_registration_lock(
-                provider, provider_subject
-            )
-            identity = await uow.external_identities.get_by_provider_subject(
-                provider, provider_subject
-            )
-            if identity is not None:
-                identity = await uow.external_identities.update_profile(
-                    identity.id,
-                    username=username,
-                    display_name=display_name,
-                )
-                user = await uow.users.get_by_id(identity.user_id)
-                if user is None:
-                    raise RuntimeError("External identity references a missing user")
-                await uow.commit()
-                return RegistrationResult(user=user, identity=identity, created=False)
-
-            user = await uow.users.create(
-                user_id=uuid4(),
-                locale="it-IT",
-                timezone="Europe/Rome",
-                preferred_load_unit=LoadUnit.KG,
-            )
-            identity = await uow.external_identities.create(
-                identity_id=uuid4(),
-                user_id=user.id,
-                provider=provider,
-                provider_subject=provider_subject,
-                username=username,
-                display_name=display_name,
-            )
-            await uow.commit()
-            return RegistrationResult(user=user, identity=identity, created=True)
 
 
 class CreateWorkout:

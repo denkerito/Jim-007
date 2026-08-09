@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from enum import StrEnum
-from typing import Self
+from typing import Literal, Self
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -114,6 +114,80 @@ class ExternalIdentity(DomainModel):
         if not cleaned:
             raise ValueError("must not be blank")
         return cleaned
+
+
+class WebAccount(DomainModel):
+    user_id: UUID
+    email: str
+    normalized_email: str
+    password_hash: str
+    email_verified_at: datetime | None = None
+    failed_login_count: int = 0
+    locked_until: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class WebSession(DomainModel):
+    id: UUID
+    user_id: UUID
+    token_hash: str
+    created_at: datetime
+    expires_at: datetime
+    revoked_at: datetime | None = None
+
+
+class AuthToken(DomainModel):
+    id: UUID
+    user_id: UUID
+    purpose: Literal["verify_email", "reset_password"]
+    token_hash: str
+    created_at: datetime
+    expires_at: datetime
+    consumed_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class TelegramLinkRequest(DomainModel):
+    id: UUID
+    user_id: UUID
+    token_hash: str
+    status: Literal[
+        "pending_telegram", "pending_web_confirmation", "completed", "cancelled"
+    ]
+    candidate_telegram_user_id: str | None = None
+    candidate_username: str | None = None
+    candidate_display_name: str | None = None
+    created_at: datetime
+    expires_at: datetime
+    completed_at: datetime | None = None
+    cancelled_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def state_must_be_consistent(self) -> Self:
+        if self.status == "pending_telegram":
+            valid = (
+                self.candidate_telegram_user_id is None
+                and self.completed_at is None
+                and self.cancelled_at is None
+            )
+        elif self.status == "pending_web_confirmation":
+            valid = (
+                self.candidate_telegram_user_id is not None
+                and self.completed_at is None
+                and self.cancelled_at is None
+            )
+        elif self.status == "completed":
+            valid = (
+                self.candidate_telegram_user_id is not None
+                and self.completed_at is not None
+                and self.cancelled_at is None
+            )
+        else:
+            valid = self.completed_at is None and self.cancelled_at is not None
+        if not valid:
+            raise ValueError("Telegram link request state is inconsistent")
+        return self
 
 
 class Exercise(DomainModel):

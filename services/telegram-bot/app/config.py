@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     telegram_mode: Literal["polling", "webhook"] = "polling"
     backend_base_url: str
     internal_api_token: SecretStr
+    public_web_url: str = "http://localhost:3000"
 
 
 @lru_cache

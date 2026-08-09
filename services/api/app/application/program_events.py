@@ -15,7 +15,7 @@ from app.application.commands import (
 from app.application.idempotency import CommandOperation, verify_replay
 from app.application.ports import ProcessedCommand, UnitOfWorkFactory, WorkoutTextInterpreter
 from app.domain.exceptions import (
-    ExternalIdentityNotRegisteredError,
+    TelegramNotLinkedError,
     NotFoundError,
     ProgramWorkoutConflictError,
     LlmInvalidResponseError,
@@ -34,7 +34,7 @@ class ProcessProgramEvent:
                 command.provider.strip(), command.provider_subject.strip()
             )
             if identity is None:
-                raise ExternalIdentityNotRegisteredError("External identity is not registered")
+                raise TelegramNotLinkedError("Telegram is not linked to a web account")
             user = await uow.users.get_by_id(identity.user_id)
             if user is None:
                 raise RuntimeError("External identity references a missing user")

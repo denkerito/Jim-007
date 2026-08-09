@@ -3,7 +3,7 @@
 import logging
 from typing import Literal, cast
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 
@@ -19,9 +19,10 @@ from app.presentation import (
 
 logger = logging.getLogger(__name__)
 BACKEND_CLIENT_KEY = "backend_client"
-REGISTRATION_ERROR_MESSAGE = (
-    "Non riesco a completare la registrazione in questo momento. "
-    "Riprova tra poco con /start."
+REGISTRATION_ERROR_MESSAGE = "Non riesco a verificare il collegamento in questo momento. Riprova tra poco."
+TELEGRAM_NOT_LINKED_MESSAGE = (
+    "Questo account Telegram non è ancora collegato a JIM007. "
+    "Accedi alla web app e scegli ‘Collega Telegram’."
 )
 WORKOUT_ERROR_MESSAGE = (
     "Non riesco a elaborare il workout in questo momento. Riprova tra poco."
@@ -31,7 +32,7 @@ HISTORY_ERROR_MESSAGE = (
 )
 HELP_MESSAGE = (
     "Comandi disponibili:\n"
-    "/start - registra il tuo profilo\n"
+    "/start - verifica il collegamento con la web app\n"
     "/workout [data] - apre un workout, per esempio /workout ieri\n"
     "Invia un messaggio testuale per registrare esercizi e serie\n"
     "/status - mostra il workout aperto\n"
@@ -72,7 +73,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     if chat is None or chat.type != ChatType.PRIVATE:
         await message.reply_text(
-            "Per registrarti, apri una chat privata con il bot e invia /start."
+            "Per collegare Telegram, apri una chat privata con il bot."
         )
         return
 
@@ -87,25 +88,58 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await message.reply_text(REGISTRATION_ERROR_MESSAGE)
         return
 
+    payload = context.args[0] if len(context.args) == 1 else None
     try:
-        result = await backend.register_telegram_user(
-            telegram_user_id=user.id,
-            username=user.username,
-            display_name=user.full_name,
-        )
-    except BackendError:
+        if payload is not None and payload.startswith("link_"):
+            token = payload.removeprefix("link_")
+            if not token:
+                raise BackendError("Invalid Telegram link", code="telegram_link_invalid")
+            result = await backend.claim_telegram_link(
+                token=token, telegram_user_id=user.id,
+                update_id=update.update_id, username=user.username,
+                display_name=user.full_name,
+            )
+        elif payload is None:
+            result = await backend.resolve_telegram_connection(
+                telegram_user_id=user.id, username=user.username,
+                display_name=user.full_name,
+            )
+        else:
+            raise BackendError("Invalid Telegram link", code="telegram_link_invalid")
+    except BackendError as error:
         logger.warning(
-            "Telegram registration failed for update_id=%s",
+            "Telegram linking failed for update_id=%s",
             update.update_id,
             exc_info=True,
         )
-        await message.reply_text(REGISTRATION_ERROR_MESSAGE)
+        if error.code == "telegram_link_invalid":
+            await message.reply_text(
+                "Questo link non è valido o è scaduto. Generane uno nuovo dalla web app.",
+                reply_markup=_web_cta(context),
+            )
+        else:
+            await message.reply_text(REGISTRATION_ERROR_MESSAGE)
         return
 
-    if result.created:
-        await message.reply_text("Registrazione completata ✅")
+    if result.kind == "candidate_recorded":
+        await message.reply_text(
+            "Account Telegram riconosciuto ✅\nTorna nella web app e conferma il collegamento."
+        )
+    elif result.kind == "linked":
+        await message.reply_text("Account collegato. Bentornato! Usa /workout per iniziare.")
     else:
-        await message.reply_text("Bentornato! Il tuo profilo è già registrato.")
+        await _reply_not_linked(message, context)
+
+
+def _web_cta(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+    url = context.application.bot_data.get("public_web_url", "http://localhost:3000")
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Apri JIM007", url=f"{str(url).rstrip('/')}/account")]]
+    )
+
+
+async def _reply_not_linked(message, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await message.reply_text(TELEGRAM_NOT_LINKED_MESSAGE, reply_markup=_web_cta(context))
 
 
 def _private_event_parts(update: Update):
@@ -150,13 +184,16 @@ async def _send_workout_event(
             exc_info=True,
         )
         messages = {
-            "external_identity_not_registered": "Registrati prima con /start.",
+            "telegram_not_linked": TELEGRAM_NOT_LINKED_MESSAGE,
             "noactiveworkout": "Non hai un workout aperto. Usa /workout per iniziare.",
             "active_workout_exists": "Hai gia un workout aperto. Usa /end per completarlo.",
             "invalidworkoutdate": "La data del workout non puo essere futura.",
             "nothingtoundo": "Non ci sono inserimenti da annullare in questo workout.",
         }
-        await message.reply_text(messages.get(error.code, WORKOUT_ERROR_MESSAGE))
+        if error.code == "telegram_not_linked":
+            await _reply_not_linked(message, context)
+        else:
+            await message.reply_text(messages.get(error.code, WORKOUT_ERROR_MESSAGE))
         return
     await message.reply_text(_format_workout_result(result))
 
@@ -214,11 +251,14 @@ async def _send_program_event(
         )
     except BackendError as error:
         messages = {
-            "external_identity_not_registered": "Registrati prima con /start.",
+            "telegram_not_linked": TELEGRAM_NOT_LINKED_MESSAGE,
             "programworkoutconflict": "Numero o alias gia in uso. Usa /editprogram per sostituire la giornata.",
             "not_found": "Non trovo una giornata attiva con questo numero o alias.",
         }
-        await message.reply_text(messages.get(error.code, PROGRAM_ERROR_MESSAGE))
+        if error.code == "telegram_not_linked":
+            await _reply_not_linked(message, context)
+        else:
+            await message.reply_text(messages.get(error.code, PROGRAM_ERROR_MESSAGE))
         return
     for chunk in _split_telegram_message(_format_program_event(result)):
         await message.reply_text(chunk)
@@ -300,8 +340,8 @@ async def workout_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             update.update_id,
             exc_info=True,
         )
-        if error.code == "external_identity_not_registered":
-            await message.reply_text("Registrati prima con /start.")
+        if error.code == "telegram_not_linked":
+            await _reply_not_linked(message, context)
         else:
             await message.reply_text(WORKOUT_ERROR_MESSAGE)
         return
@@ -423,8 +463,8 @@ async def _send_history_query(
             kind,
             exc_info=True,
         )
-        if error.code == "external_identity_not_registered":
-            await message.reply_text("Registrati prima con /start.")
+        if error.code == "telegram_not_linked":
+            await _reply_not_linked(message, context)
         else:
             await message.reply_text(HISTORY_ERROR_MESSAGE)
         return

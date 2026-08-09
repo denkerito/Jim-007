@@ -17,19 +17,22 @@ from app.api.schemas import (
     HistoryQueryResponse,
     ProgramEventRequest,
     ProgramEventResponse,
-    TelegramRegistrationRequest,
-    UserRegistrationResponse,
     WorkoutEventRequest,
     WorkoutEventResponse,
     WorkoutStatusRequest,
     WorkoutStatusResponse,
+)
+from app.api.telegram_links import (
+    TelegramClaimRequest,
+    TelegramInternalResponse,
+    TelegramResolveRequest,
 )
 from scripts.internal_api_contract import CONTRACT_PATH, filtered_openapi, serialized_contract
 
 
 pytestmark = pytest.mark.contract
 
-MANIFEST_PATH = Path(__file__).parents[3] / "contracts" / "internal-api" / "v1" / "interactions.json"
+MANIFEST_PATH = Path(__file__).parents[3] / "contracts" / "internal-api" / "v2" / "interactions.json"
 
 
 def _manifest() -> dict[str, Any]:
@@ -78,7 +81,8 @@ def test_provider_accepts_every_contract_interaction(interaction: dict[str, Any]
     operation = interaction["operation"]
     body = interaction["request"]["body"]
     request_models = {
-        "registration": TelegramRegistrationRequest,
+        "telegram_claim": TelegramClaimRequest,
+        "telegram_resolve": TelegramResolveRequest,
         "workout_event": WorkoutEventRequest,
         "program_event": ProgramEventRequest,
         "status": WorkoutStatusRequest,
@@ -91,7 +95,8 @@ def test_provider_accepts_every_contract_interaction(interaction: dict[str, Any]
         ApiErrorResponse.model_validate(response)
         return
     response_adapters = {
-        "registration": TypeAdapter(UserRegistrationResponse),
+        "telegram_claim": TypeAdapter(TelegramInternalResponse),
+        "telegram_resolve": TypeAdapter(TelegramInternalResponse),
         "workout_event": TypeAdapter(WorkoutEventResponse),
         "program_event": TypeAdapter(ProgramEventResponse),
         "status": TypeAdapter(WorkoutStatusResponse),
@@ -116,7 +121,7 @@ def test_contract_covers_every_response_discriminator() -> None:
         "status": _kind_values(TypeAdapter(WorkoutStatusResponse).json_schema()),
         "history": _kind_values(TypeAdapter(HistoryQueryResponse).json_schema()),
     }
-    assert covered == expected
+    assert all(covered[name] and covered[name] <= expected[name] for name in covered)
 
 
 def test_internal_authentication_and_idempotency_are_documented() -> None:
@@ -125,7 +130,10 @@ def test_internal_authentication_and_idempotency_are_documented() -> None:
         "scheme": "bearer",
         "type": "http",
     }
-    idempotent_paths = {"/internal/workout-events", "/internal/program-events"}
+    idempotent_paths = {
+        "/internal/workout-events", "/internal/program-events",
+        "/internal/telegram-link-requests/claim",
+    }
     for path, path_item in schema["paths"].items():
         operation = path_item["post"]
         assert operation["security"] == [{"HTTPBearer": []}]

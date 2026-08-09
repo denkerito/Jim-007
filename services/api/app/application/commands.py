@@ -11,9 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.domain.models import (
     Exercise,
-    ExternalIdentity,
     LoadUnit,
-    User,
     Workout,
     WorkoutExercise,
     ProgramWorkout,
@@ -328,21 +326,6 @@ class UndoWorkoutMessageCommand(CommandModel):
     idempotency_key: str = Field(min_length=1, max_length=255)
     request_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
-
-class RegisterExternalIdentityCommand(CommandModel):
-    provider: str = Field(min_length=1, max_length=32)
-    provider_subject: str = Field(min_length=1, max_length=255)
-    username: str | None = Field(default=None, max_length=255)
-    display_name: str | None = Field(default=None, max_length=255)
-
-    @field_validator("provider", "provider_subject")
-    @classmethod
-    def identity_text_must_not_be_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("must not be blank")
-        return value
-
-
 class ProcessWorkoutEventCommand(CommandModel):
     provider: str = Field(min_length=1, max_length=32)
     provider_subject: str = Field(min_length=1, max_length=255)
@@ -414,13 +397,6 @@ class HistoryCursor(CommandModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("created_at must include a timezone")
         return value
-
-
-@dataclass(frozen=True, slots=True)
-class RegistrationResult:
-    user: User
-    identity: ExternalIdentity
-    created: bool
 
 
 ResultT = TypeVar("ResultT", Workout, WorkoutExercise)

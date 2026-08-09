@@ -18,6 +18,10 @@ venv.bak/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+node_modules/
+dist/
+.pnpm-store/
+*.tsbuildinfo
 
 # IDE and OS files
 .idea/

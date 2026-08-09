@@ -1,7 +1,7 @@
 import os
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from testcontainers.community.postgres import PostgresContainer
 
 from app.config import get_settings
-from app.infrastructure.database.models import AppUser
+from app.infrastructure.database.models import AppUser, ExternalIdentity
 
 
 os.environ.setdefault("APP_ENV", "test")
@@ -59,3 +59,21 @@ async def user_id(session_factory: async_sessionmaker[AsyncSession]):
         session.add(AppUser(id=value))
         await session.commit()
     return value
+
+
+@pytest_asyncio.fixture
+async def telegram_identity_factory(session_factory: async_sessionmaker[AsyncSession]):
+    async def create(subject: int) -> UUID:
+        user_id = uuid4()
+        async with session_factory() as session:
+            session.add(AppUser(id=user_id))
+            session.add(
+                ExternalIdentity(
+                    id=uuid4(), user_id=user_id, provider="telegram",
+                    provider_subject=str(subject),
+                )
+            )
+            await session.commit()
+        return user_id
+
+    return create
