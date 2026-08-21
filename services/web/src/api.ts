@@ -14,7 +14,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   const response = await fetch(path, {...options, headers, credentials: "include"});
   if (!response.ok) {
     const body = await response.json().catch(() => null) as {detail?: {code?: string; message?: string}} | null;
-    throw new ApiError(response.status, body?.detail?.code ?? "request_failed", body?.detail?.message ?? "Operazione non riuscita");
+    throw new ApiError(response.status, body?.detail?.code ?? "request_failed", body?.detail?.message ?? "Something went wrong");
   }
   if (response.status === 204 || response.headers.get("content-length") === "0") return undefined as T;
   return response.json() as Promise<T>;

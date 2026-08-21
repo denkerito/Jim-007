@@ -19,7 +19,7 @@ Browser -> Nginx -> FastAPI -> PostgreSQL
 Telegram -> Bot --------+
 ```
 
-Il bot non accede direttamente al database e non contiene logica di dominio. Comunica con FastAPI attraverso un contratto HTTP e un token interno. Il browser raggiunge solo `/api/*` tramite Nginx; `/internal/*` non viene inoltrato.
+L'account web e l'identita applicativa sono il punto di ingresso principale e non dipendono da Telegram. Telegram e un'integrazione opzionale rappresentata come identita esterna; altri client potranno essere aggiunti senza cambiare la proprieta dei dati o il dominio. Il bot non accede direttamente al database e non contiene logica di dominio. Comunica con FastAPI attraverso un contratto HTTP e un token interno. Il browser raggiunge solo `/api/*` tramite Nginx; `/internal/*` non viene inoltrato.
 
 I messaggi workout usano `POST /internal/workout-events`. Il bot traduce
 `/workout`, testo libero, `/end`, `/cancel` e `/undo` nelle azioni `open`, `log`,

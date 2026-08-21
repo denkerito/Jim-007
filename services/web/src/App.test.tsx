@@ -18,10 +18,10 @@ function renderAt(path: string) {
   return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[path]}><App/></MemoryRouter></QueryClientProvider>);
 }
 
-describe("authentication and linking routes", () => {
+describe("authentication and optional integrations", () => {
   it("renders registration", () => {
     renderAt("/register");
-    expect(screen.getByRole("heading", {name: "Crea il tuo account"})).toBeInTheDocument();
+    expect(screen.getByRole("heading", {name: "Create your account"})).toBeInTheDocument();
     expect(screen.getByLabelText("Email")).toBeInTheDocument();
   });
 
@@ -31,7 +31,7 @@ describe("authentication and linking routes", () => {
       {status: 401},
     )));
     renderAt("/account");
-    expect(await screen.findByRole("heading", {name: "Bentornato"})).toBeInTheDocument();
+    expect(await screen.findByRole("heading", {name: "Welcome back"})).toBeInTheDocument();
   });
 
   it("starts Telegram linking with the session CSRF token", async () => {
@@ -47,8 +47,8 @@ describe("authentication and linking routes", () => {
     const open = window.open;
     window.open = () => null;
     renderAt("/account");
-    await userEvent.click(await screen.findByRole("button", {name: "Collega Telegram"}));
-    expect(await screen.findByText("In attesa che tu apra Telegram…")).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", {name: "Connect Telegram"}));
+    expect(await screen.findByText("Waiting for you to open Telegram…")).toBeInTheDocument();
     window.open = open;
   });
 });

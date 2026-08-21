@@ -1,8 +1,8 @@
 # JIM007
 
-**A conversational workout tracker.**
+**A workout tracker with optional conversational integrations.**
 
-JIM007 turns natural-language training notes into structured workout data. Open a workout in Telegram, send something like `bench press 80x8 80x8 80x7`, and the application uses LLM to interpret the message before validating and storing it in PostgreSQL.
+JIM007 keeps structured workout data behind a platform-independent web account. Optional conversational clients can turn natural-language training notes into structured data; the first available integration is Telegram. Send something like `bench press 80x8 80x8 80x7`, and the application uses an LLM to interpret the message before validating and storing it in PostgreSQL.
 
 The LLM is only an interpreter: it never accesses the database, and every generated payload is checked by the application before it is persisted.
 
@@ -11,7 +11,7 @@ The LLM is only an interpreter: it never accesses the database, and every genera
 ## Features
 
 - Register and verify a web account with email and password
-- Link exactly one Telegram account through an expiring, two-step confirmation flow
+- Optionally link one Telegram account through an expiring, two-step confirmation flow
 - Log one or more exercises from natural-language messages
 - Keep workouts as drafts until they are explicitly completed
 - Inspect, undo the last entry, or cancel an active workout
