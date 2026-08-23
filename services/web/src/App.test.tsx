@@ -1,5 +1,5 @@
 import {afterAll, afterEach, beforeAll, describe, expect, it} from "vitest";
-import {cleanup, render, screen} from "@testing-library/react";
+import {cleanup, render, screen, waitFor} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {MemoryRouter} from "react-router-dom";
 import {QueryClient, QueryClientProvider} from "@tanstack/react-query";
@@ -23,6 +23,20 @@ const workout = {
   id: "w1", user_id: "u1", performed_on: "2026-08-20", status: "completed",
   notes: "Upper body", created_at: "2026-08-20T10:00:00Z", completed_at: "2026-08-20T11:00:00Z", program_workout: null,
   exercises: [{id: "we1", position: 1, notes: null, exercise: {id: "e1", name: "Bench Press", normalized_name: "bench press"}, sets: [{id: "s1", set_number: 1, repetitions: 8, load: {value: "80.000", unit: "kg", kilograms: "80.000"}, notes: null}]}],
+};
+const overviewStatistics = {
+  period: {period: "4w", from_date: "2026-07-27", to_date: "2026-08-23"}, bucket: "week",
+  current: {workout_count: 3, active_day_count: 3, set_count: 12, repetition_count: 96, external_volume: {value: "7200.000", load_unit: "kg", kilogram_repetitions: "7200.000"}},
+  previous: {workout_count: 2, active_day_count: 2, set_count: 8, repetition_count: 64, external_volume: {value: "5000.000", load_unit: "kg", kilogram_repetitions: "5000.000"}},
+  series: [{period_start: "2026-08-17", workout_count: 3, set_count: 12, repetition_count: 96, external_volume: {value: "7200.000", load_unit: "kg", kilogram_repetitions: "7200.000"}}],
+  top_exercises: [{exercise_id: "e1", exercise_name: "Bench Press", workout_count: 3, set_count: 12}],
+  recent_records: [{exercise_id: "e1", exercise_name: "Bench Press", workout_id: "w1", performed_on: "2026-08-20", estimated_one_rep_max: {value: "101.333", unit: "kg", kilograms: "101.333"}, previous_best: {value: "98.000", unit: "kg", kilograms: "98.000"}}],
+};
+const exerciseStatistics = {
+  exercise: {id: "e1", name: "Bench Press", normalized_name: "bench press"},
+  period: {period: "4w", from_date: "2026-07-27", to_date: "2026-08-23"},
+  summary: {session_count: 1, set_count: 1, repetition_count: 8, max_set_repetitions: 8, best_load: {value: "80.000", unit: "kg", kilograms: "80.000"}, best_estimated_one_rep_max: {value: "101.333", unit: "kg", kilograms: "101.333"}, best_session_volume: {value: "640.000", load_unit: "kg", kilogram_repetitions: "640.000"}},
+  series: [{workout_id: "w1", performed_on: "2026-08-20", set_count: 1, repetition_count: 8, max_set_repetitions: 8, top_load: {value: "80.000", unit: "kg", kilograms: "80.000"}, estimated_one_rep_max: {value: "101.333", unit: "kg", kilograms: "101.333"}, external_volume: {value: "640.000", load_unit: "kg", kilogram_repetitions: "640.000"}}],
 };
 
 describe("authentication and optional integrations", () => {
@@ -63,11 +77,59 @@ describe("authentication and optional integrations", () => {
     server.use(
       http.get("/api/auth/session", () => HttpResponse.json(session)),
       http.get("/api/me/workouts", () => HttpResponse.json({items: [workout], next_cursor: null})),
+      http.get("/api/me/statistics/overview", () => HttpResponse.json(overviewStatistics)),
     );
     renderAt("/");
     expect(await screen.findByRole("heading", {name: "Dashboard"})).toBeInTheDocument();
     expect((await screen.findAllByText("Bench Press")).length).toBeGreaterThan(0);
     expect(screen.getByRole("link", {name: "View all workouts"})).toHaveAttribute("href", "/workouts");
+    expect(screen.getByText("Recent records")).toBeInTheDocument();
+    expect(screen.getAllByText("+50%").length).toBeGreaterThan(0);
+  });
+
+  it("keeps recent workouts visible when dashboard statistics fail", async () => {
+    server.use(
+      http.get("/api/auth/session", () => HttpResponse.json(session)),
+      http.get("/api/me/workouts", () => HttpResponse.json({items: [workout], next_cursor: null})),
+      http.get("/api/me/statistics/overview", () => HttpResponse.json({detail: {code: "statistics_failed", message: "Statistics unavailable"}}, {status: 500})),
+    );
+    renderAt("/");
+    expect(await screen.findByText("Statistics unavailable")).toBeInTheDocument();
+    expect((await screen.findAllByText("Bench Press")).length).toBeGreaterThan(0);
+  });
+
+  it("shows exercise progress and refetches it when the period changes", async () => {
+    let requestedPeriod = "";
+    server.use(
+      http.get("/api/auth/session", () => HttpResponse.json(session)),
+      http.get("/api/me/exercises/e1/history", () => HttpResponse.json({exercise: exerciseStatistics.exercise, items: [{workout_id: "w1", performed_on: "2026-08-20", workout_notes: null, occurrences: workout.exercises}], next_cursor: null})),
+      http.get("/api/me/exercises/e1/statistics", ({request}) => {
+        requestedPeriod = new URL(request.url).searchParams.get("period") ?? "";
+        return HttpResponse.json(exerciseStatistics);
+      }),
+    );
+    renderAt("/exercises/e1");
+    expect(await screen.findByText("Estimated 1RM and top load")).toBeInTheDocument();
+    expect(screen.getByText("101.333 kg")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", {name: "12 weeks"}));
+    await waitFor(() => expect(requestedPeriod).toBe("12w"));
+  });
+
+  it("uses repetition progress for an exercise without loaded sets", async () => {
+    const bodyweight = {
+      ...exerciseStatistics,
+      exercise: {id: "e2", name: "Pull-up", normalized_name: "pull-up"},
+      summary: {...exerciseStatistics.summary, best_load: null, best_estimated_one_rep_max: null, best_session_volume: null, max_set_repetitions: 15},
+      series: [{...exerciseStatistics.series[0], top_load: null, estimated_one_rep_max: null, external_volume: null, repetition_count: 15, max_set_repetitions: 15}],
+    };
+    server.use(
+      http.get("/api/auth/session", () => HttpResponse.json(session)),
+      http.get("/api/me/exercises/e2/history", () => HttpResponse.json({exercise: bodyweight.exercise, items: [], next_cursor: null})),
+      http.get("/api/me/exercises/e2/statistics", () => HttpResponse.json(bodyweight)),
+    );
+    renderAt("/exercises/e2");
+    expect(await screen.findByText(/no loaded sets/i)).toBeInTheDocument();
+    expect(screen.getByText("Repetitions per session")).toBeInTheDocument();
   });
 
   it("expands a workout and links to exercise history", async () => {

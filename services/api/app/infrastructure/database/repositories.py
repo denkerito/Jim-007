@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.application.commands import ExerciseHistoryItem, HistoryCursor
 from app.application.ports import ProcessedCommand as CommandRecord
+from app.application.statistics import StatisticsSetRecord
 from app.domain.exceptions import ActiveWorkoutExistsError
 from app.domain.models import (
     Exercise,
@@ -770,6 +771,66 @@ class SqlAlchemyWorkoutRepository:
             if len(result) == len(wanted):
                 break
         return result
+
+
+class SqlAlchemyStatisticsRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list_completed_sets(
+        self,
+        user_id: UUID,
+        *,
+        from_date: date | None,
+        to_date: date,
+        exercise_id: UUID | None = None,
+    ) -> tuple[StatisticsSetRecord, ...]:
+        statement = (
+            select(
+                orm.Workout.id,
+                orm.Workout.performed_on,
+                orm.Workout.created_at,
+                orm.Exercise.id,
+                orm.Exercise.name,
+                orm.PerformedSet.repetitions,
+                orm.PerformedSet.load_kg,
+            )
+            .join(orm.WorkoutExercise, orm.WorkoutExercise.workout_id == orm.Workout.id)
+            .join(orm.Exercise, orm.Exercise.id == orm.WorkoutExercise.exercise_id)
+            .join(
+                orm.PerformedSet,
+                orm.PerformedSet.workout_exercise_id == orm.WorkoutExercise.id,
+            )
+            .where(
+                orm.Workout.user_id == user_id,
+                orm.Workout.status == "completed",
+                orm.Workout.performed_on <= to_date,
+            )
+            .order_by(
+                orm.Workout.performed_on,
+                orm.Workout.created_at,
+                orm.Workout.id,
+                orm.WorkoutExercise.position,
+                orm.PerformedSet.set_number,
+            )
+        )
+        if from_date is not None:
+            statement = statement.where(orm.Workout.performed_on >= from_date)
+        if exercise_id is not None:
+            statement = statement.where(orm.WorkoutExercise.exercise_id == exercise_id)
+        rows = (await self._session.execute(statement)).all()
+        return tuple(
+            StatisticsSetRecord(
+                workout_id=row[0],
+                performed_on=row[1],
+                workout_created_at=row[2],
+                exercise_id=row[3],
+                exercise_name=row[4],
+                repetitions=row[5],
+                load_kg=row[6],
+            )
+            for row in rows
+        )
 
 
 class SqlAlchemyProgramWorkoutRepository:

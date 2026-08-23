@@ -249,15 +249,18 @@ Workout history, exercise history, progressione e record sono proiezioni calcola
 
 Nell'MVP non esistono entita o tabelle persistenti come `personal_record` o `exercise_statistics`. Questo evita problemi di sincronizzazione quando in futuro verranno introdotte modifiche o cancellazioni.
 
-Esempi di proiezioni future:
+Le proiezioni read-only implementate includono:
 
-- massimo carico per esercizio;
-- massimo numero di ripetizioni a un dato carico;
+- massimo carico e numero di ripetizioni per esercizio;
 - volume totale, calcolato come somma di `load_kg * repetitions`;
-- estimated 1RM;
-- andamento del carico o del volume nel tempo.
+- estimated 1RM con formula Epley per serie da 1 a 12 ripetizioni;
+- andamento del carico, del volume e della frequenza nel tempo;
+- record e1RM e confronto con il periodo precedente.
 
-Le definizioni esatte dei record, in particolare la formula dell'estimated 1RM, sono decisioni applicative e non appartengono allo schema MVP.
+Le proiezioni considerano esclusivamente workout `completed` e vengono calcolate
+dalle tabelle normalizzate, senza cache o tabelle statistiche persistenti. Le
+definizioni delle metriche rimangono decisioni applicative e non appartengono allo
+schema relazionale.
 
 ### 3.11 WorkoutLogClarification
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from app.application.commands import (
@@ -38,6 +38,9 @@ from app.domain.models import (
     WebAccount,
     WebSession,
 )
+
+if TYPE_CHECKING:
+    from app.application.statistics import StatisticsSetRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,6 +227,17 @@ class WorkoutRepository(Protocol):
     ) -> dict[UUID, ExerciseHistoryItem]: ...
 
 
+class StatisticsRepository(Protocol):
+    async def list_completed_sets(
+        self,
+        user_id: UUID,
+        *,
+        from_date: date | None,
+        to_date: date,
+        exercise_id: UUID | None = None,
+    ) -> tuple["StatisticsSetRecord", ...]: ...
+
+
 class ProgramWorkoutRepository(Protocol):
     async def acquire_user_lock(self, user_id: UUID) -> None: ...
     async def list_active(self, user_id: UUID) -> tuple[ProgramWorkout, ...]: ...
@@ -290,6 +304,7 @@ class UnitOfWork(Protocol):
     telegram_link_requests: TelegramLinkRequestRepository
     exercises: ExerciseRepository
     workouts: WorkoutRepository
+    statistics: StatisticsRepository
     program_workouts: ProgramWorkoutRepository
     processed_commands: ProcessedCommandRepository
     workout_log_clarifications: WorkoutLogClarificationRepository

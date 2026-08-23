@@ -11,6 +11,35 @@ export type WorkoutPage = {items: Workout[]; next_cursor: string | null};
 export type ExerciseCatalog = {items: Exercise[]};
 export type ExerciseHistoryItem = {workout_id: string; performed_on: string; workout_notes: string | null; occurrences: WorkoutExercise[]};
 export type ExerciseHistoryPage = {exercise: Exercise; items: ExerciseHistoryItem[]; next_cursor: string | null};
+export type StatisticsPeriod = "4w" | "12w" | "1y" | "all";
+export type StatisticsWindow = {period: StatisticsPeriod; from_date: string | null; to_date: string};
+export type MassMetric = {value: string; unit: "kg" | "lb"; kilograms: string};
+export type VolumeMetric = {value: string; load_unit: "kg" | "lb"; kilogram_repetitions: string};
+export type ExerciseStatisticsPoint = {
+  workout_id: string; performed_on: string; set_count: number; repetition_count: number;
+  max_set_repetitions: number; top_load: MassMetric | null;
+  estimated_one_rep_max: MassMetric | null; external_volume: VolumeMetric | null;
+};
+export type ExerciseStatistics = {
+  exercise: Exercise; period: StatisticsWindow;
+  summary: {
+    session_count: number; set_count: number; repetition_count: number; max_set_repetitions: number;
+    best_load: MassMetric | null; best_estimated_one_rep_max: MassMetric | null;
+    best_session_volume: VolumeMetric | null;
+  };
+  series: ExerciseStatisticsPoint[];
+};
+export type OverviewTotals = {
+  workout_count: number; active_day_count: number; set_count: number;
+  repetition_count: number; external_volume: VolumeMetric | null;
+};
+export type OverviewStatistics = {
+  period: StatisticsWindow; bucket: "week" | "month"; current: OverviewTotals;
+  previous: OverviewTotals | null;
+  series: Array<{period_start: string; workout_count: number; set_count: number; repetition_count: number; external_volume: VolumeMetric | null}>;
+  top_exercises: Array<{exercise_id: string; exercise_name: string; workout_count: number; set_count: number}>;
+  recent_records: Array<{exercise_id: string; exercise_name: string; workout_id: string; performed_on: string; estimated_one_rep_max: MassMetric; previous_best: MassMetric}>;
+};
 
 let csrf: string | null = null;
 export class ApiError extends Error {constructor(public status: number, public code: string, message: string) {super(message);}}
@@ -36,8 +65,14 @@ function withCursor(path: string, limit: number, cursor?: string): string {
   return `${path}?${params}`;
 }
 
+function withPeriod(path: string, period: StatisticsPeriod): string {
+  return `${path}?${new URLSearchParams({period})}`;
+}
+
 export const historyApi = {
   workouts: (limit: number, cursor?: string) => api<WorkoutPage>(withCursor("/api/me/workouts", limit, cursor)),
   exercises: () => api<ExerciseCatalog>("/api/me/exercises"),
   exerciseHistory: (exerciseId: string, limit: number, cursor?: string) => api<ExerciseHistoryPage>(withCursor(`/api/me/exercises/${exerciseId}/history`, limit, cursor)),
+  overviewStatistics: (period: StatisticsPeriod) => api<OverviewStatistics>(withPeriod("/api/me/statistics/overview", period)),
+  exerciseStatistics: (exerciseId: string, period: StatisticsPeriod) => api<ExerciseStatistics>(withPeriod(`/api/me/exercises/${exerciseId}/statistics`, period)),
 };

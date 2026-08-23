@@ -29,6 +29,12 @@ workout completati; lo storico workout e lo storico esercizio mantengono la
 paginazione keyset, mentre il catalogo personale degli esercizi viene restituito
 in ordine alfabetico per la ricerca locale nel browser.
 
+Le statistiche web usano `GET /api/me/statistics/overview` e
+`GET /api/me/exercises/{exercise_id}/statistics`. Sono proiezioni read-only dei
+soli workout completati, calcolate tramite un repository dedicato senza persistere
+record o aggregati derivati. I periodi supportati sono 4 settimane, 12 settimane,
+un anno e tutto lo storico, calcolati sulla data locale dell'utente.
+
 I messaggi workout usano `POST /internal/workout-events`. Il bot traduce
 `/workout`, testo libero, `/end`, `/cancel` e `/undo` nelle azioni `open`, `log`,
 `complete`, `cancel` e `undo`, allegando una idempotency key derivata dal Telegram

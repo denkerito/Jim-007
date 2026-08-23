@@ -15,6 +15,7 @@ from app.api.program_events import router as program_events_router
 from app.api.web_auth import router as web_auth_router
 from app.api.telegram_links import router as telegram_links_router, internal_router as telegram_links_internal_router
 from app.api.web_history import router as web_history_router
+from app.api.web_statistics import router as web_statistics_router
 from app.config import get_settings
 from app.infrastructure.database.session import engine
 from app.infrastructure.llm import GeminiWorkoutTextInterpreter
@@ -66,6 +67,7 @@ app.include_router(web_auth_router)
 app.include_router(telegram_links_router)
 app.include_router(telegram_links_internal_router)
 app.include_router(web_history_router)
+app.include_router(web_statistics_router)
 
 
 @app.get("/health/live", tags=["system"])

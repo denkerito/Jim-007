@@ -30,6 +30,7 @@ The LLM is deliberately kept outside the database boundary: it interprets text i
 - Conversational recovery from incomplete workout logs
 - Draft workouts with status, undo, completion, and cancellation
 - Workout and per-exercise history
+- Training dashboard and per-exercise progress statistics
 - Reusable training programs with aliases
 - Web registration, email verification, and secure Telegram account linking
 - Searchable exercise directory and recent activity dashboard
@@ -172,7 +173,6 @@ More detail is available in the [architecture](docs/architecture.md), [database 
 ## Roadmap
 
 - Web workout creation and editing
-- Progress charts and training statistics
 - RPE, RIR, duration, and distance metrics
 - Conversational corrections with an audit trail
 - Canonical exercise aliases and smarter matching

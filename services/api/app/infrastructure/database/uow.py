@@ -14,6 +14,7 @@ from app.infrastructure.database.repositories import (
     SqlAlchemyWebSessionRepository,
     SqlAlchemyWorkoutRepository,
     SqlAlchemyWorkoutLogClarificationRepository,
+    SqlAlchemyStatisticsRepository,
 )
 
 
@@ -33,6 +34,7 @@ class SqlAlchemyUnitOfWork:
         self.telegram_link_requests = SqlAlchemyTelegramLinkRequestRepository(self._session)
         self.exercises = SqlAlchemyExerciseRepository(self._session)
         self.workouts = SqlAlchemyWorkoutRepository(self._session)
+        self.statistics = SqlAlchemyStatisticsRepository(self._session)
         self.workout_log_clarifications = SqlAlchemyWorkoutLogClarificationRepository(
             self._session
         )
