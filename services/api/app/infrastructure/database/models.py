@@ -367,6 +367,68 @@ Index(
 )
 
 
+class WorkoutLogClarification(Base):
+    __tablename__ = "workout_log_clarification"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "workout_id"],
+            ["workout.user_id", "workout.id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'resolved', 'rewrite_required', 'cancelled', 'expired')",
+            name="status_supported",
+        ),
+        CheckConstraint("expires_at > created_at", name="expires_after_creation"),
+        CheckConstraint("btrim(model) <> ''", name="model_not_blank"),
+        CheckConstraint(
+            "btrim(initial_prompt_version) <> ''", name="initial_prompt_version_not_blank"
+        ),
+        CheckConstraint(
+            "btrim(followup_prompt_version) <> ''", name="followup_prompt_version_not_blank"
+        ),
+        CheckConstraint(
+            "(status = 'pending' AND original_text IS NOT NULL "
+            "AND btrim(original_text) <> '' AND clarification_message IS NOT NULL "
+            "AND btrim(clarification_message) <> '' AND terminal_at IS NULL) OR "
+            "(status <> 'pending' AND original_text IS NULL "
+            "AND clarification_message IS NULL AND terminal_at IS NOT NULL)",
+            name="state_consistent",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    user_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=False)
+    workout_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    original_text: Mapped[str | None] = mapped_column(Text)
+    clarification_message: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    initial_prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    followup_prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    terminal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+Index(
+    "uq_workout_log_clarification_pending",
+    WorkoutLogClarification.user_id,
+    WorkoutLogClarification.workout_id,
+    unique=True,
+    postgresql_where=WorkoutLogClarification.status == "pending",
+)
+
+Index(
+    "ix_workout_log_clarification_workout_status",
+    WorkoutLogClarification.user_id,
+    WorkoutLogClarification.workout_id,
+    WorkoutLogClarification.status,
+)
+
+
 class WorkoutExercise(Base):
     __tablename__ = "workout_exercise"
     __table_args__ = (

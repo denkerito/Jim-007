@@ -14,6 +14,8 @@ from app.domain.models import (
     WebAccount,
     WebSession,
     Workout,
+    WorkoutLogClarification,
+    WorkoutLogClarificationStatus,
     WorkoutExercise,
     WorkoutStatus,
 )
@@ -67,6 +69,25 @@ def to_auth_token(model: orm.AuthToken) -> AuthToken:
 
 def to_telegram_link_request(model: orm.TelegramLinkRequest) -> TelegramLinkRequest:
     return TelegramLinkRequest.model_validate(model, from_attributes=True)
+
+
+def to_workout_log_clarification(
+    model: orm.WorkoutLogClarification,
+) -> WorkoutLogClarification:
+    return WorkoutLogClarification(
+        id=model.id,
+        user_id=model.user_id,
+        workout_id=model.workout_id,
+        status=WorkoutLogClarificationStatus(model.status),
+        original_text=model.original_text,
+        clarification_message=model.clarification_message,
+        model=model.model,
+        initial_prompt_version=model.initial_prompt_version,
+        followup_prompt_version=model.followup_prompt_version,
+        created_at=model.created_at,
+        expires_at=model.expires_at,
+        terminal_at=model.terminal_at,
+    )
 
 
 def to_program_workout(model: orm.ProgramWorkout) -> ProgramWorkout:

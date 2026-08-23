@@ -259,11 +259,25 @@ Esempi di proiezioni future:
 
 Le definizioni esatte dei record, in particolare la formula dell'estimated 1RM, sono decisioni applicative e non appartengono allo schema MVP.
 
+### 3.11 WorkoutLogClarification
+
+`WorkoutLogClarification` conserva esclusivamente il contesto necessario per un
+singolo follow-up a un messaggio di workout ambiguo. Ogni draft puo avere al massimo
+un chiarimento `pending`. Il record contiene testo originale, domanda, modello,
+versioni dei prompt e una scadenza configurabile, pari a 15 minuti per default.
+
+Il secondo messaggio chiude sempre il flusso: `resolved` quando produce un log
+completo oppure `rewrite_required` quando resta ambiguo. Anche `cancelled` ed
+`expired` sono stati terminali. In tutti gli stati terminali testo originale e
+domanda vengono impostati a null; rimangono soltanto metadati tecnici per idempotenza
+e audit. Risoluzione e persistenza dei set avvengono nella stessa transazione.
+
 ## 4. Evoluzioni del dominio fuori dall'MVP
 
 ### 4.1 Interaction
 
-Una futura entita `Interaction` potra memorizzare:
+Il modello corrente introduce soltanto `WorkoutLogClarification`, specializzato per
+un follow-up. Una futura entita generale `Interaction` potra memorizzare:
 
 - messaggio ricevuto;
 - intent e payload validato;
@@ -272,7 +286,9 @@ Una futura entita `Interaction` potra memorizzare:
 - workout prodotto;
 - collegamento all'interazione corretta o sostituita.
 
-Servira per correzioni conversazionali, audit, debugging, retry complessi e analisi della qualita del LLM. Non viene introdotta nell'MVP perche non sono previste correzioni o persistenza del contesto conversazionale.
+Servira per correzioni conversazionali, transcript multi-turn, debugging avanzato e
+analisi della qualita del LLM. Non sostituisce il workflow limitato e deterministico
+del chiarimento corrente finche questi requisiti non saranno necessari.
 
 ### 4.2 Correzione e versionamento
 

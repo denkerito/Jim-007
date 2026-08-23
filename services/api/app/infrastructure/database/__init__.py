@@ -9,6 +9,7 @@ from app.infrastructure.database.models import (
     ProcessedCommand,
     Workout,
     WorkoutExercise,
+    WorkoutLogClarification,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "ProcessedCommand",
     "Workout",
     "WorkoutExercise",
+    "WorkoutLogClarification",
 ]

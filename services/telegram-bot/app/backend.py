@@ -94,6 +94,7 @@ class _WorkoutEventResponse(BaseModel):
         "cancelled",
         "undone",
         "needs_clarification",
+        "rewrite_required",
     ]
     replayed: bool = False
     workout: _WorkoutResponse | None = None
@@ -211,6 +212,7 @@ class WorkoutEventResult:
         "cancelled",
         "undone",
         "needs_clarification",
+        "rewrite_required",
     ]
     replayed: bool
     performed_on: date | None

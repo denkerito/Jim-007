@@ -9,6 +9,8 @@ from app.domain.models import (
     User,
     Workout,
     WorkoutExercise,
+    WorkoutLogClarification,
+    WorkoutLogClarificationStatus,
     WorkoutStatus,
 )
 
@@ -21,5 +23,7 @@ __all__ = [
     "User",
     "Workout",
     "WorkoutExercise",
+    "WorkoutLogClarification",
+    "WorkoutLogClarificationStatus",
     "WorkoutStatus",
 ]

@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=8.0, gt=0, le=60)
     llm_max_output_tokens: int = Field(default=4096, gt=0, le=65536)
     llm_thinking_level: Literal["minimal", "low", "medium", "high"] = "minimal"
+    llm_clarification_ttl_seconds: int = Field(default=900, ge=60, le=3600)
 
     @model_validator(mode="after")
     def production_auth_must_be_secure(self) -> "Settings":

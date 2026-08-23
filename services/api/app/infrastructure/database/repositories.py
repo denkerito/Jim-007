@@ -18,6 +18,7 @@ from app.domain.models import (
     LoadUnit,
     User,
     Workout,
+    WorkoutLogClarification,
     WorkoutExercise,
     ProgramWorkout,
 )
@@ -31,6 +32,7 @@ from app.infrastructure.database.mappers import (
     to_web_session,
     to_user,
     to_workout,
+    to_workout_log_clarification,
     to_workout_exercise,
     to_program_workout,
 )
@@ -866,6 +868,147 @@ class SqlAlchemyProgramWorkoutRepository:
         if loaded is None:
             raise RuntimeError("Created program workout could not be loaded")
         return to_program_workout(loaded)
+
+
+class SqlAlchemyWorkoutLogClarificationRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def _get(
+        self, clarification_id: UUID, user_id: UUID, *, for_update: bool = False
+    ) -> orm.WorkoutLogClarification | None:
+        statement = select(orm.WorkoutLogClarification).where(
+            orm.WorkoutLogClarification.id == clarification_id,
+            orm.WorkoutLogClarification.user_id == user_id,
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return await self._session.scalar(statement)
+
+    async def create(
+        self,
+        *,
+        clarification_id: UUID,
+        user_id: UUID,
+        workout_id: UUID,
+        original_text: str,
+        clarification_message: str,
+        model: str,
+        initial_prompt_version: str,
+        followup_prompt_version: str,
+        created_at: datetime,
+        expires_at: datetime,
+    ) -> WorkoutLogClarification:
+        inserted_id = await self._session.scalar(
+            insert(orm.WorkoutLogClarification)
+            .values(
+                id=clarification_id,
+                user_id=user_id,
+                workout_id=workout_id,
+                status="pending",
+                original_text=original_text,
+                clarification_message=clarification_message,
+                model=model,
+                initial_prompt_version=initial_prompt_version,
+                followup_prompt_version=followup_prompt_version,
+                created_at=created_at,
+                expires_at=expires_at,
+            )
+            .on_conflict_do_nothing(
+                index_elements=["user_id", "workout_id"],
+                index_where=orm.WorkoutLogClarification.status == "pending",
+            )
+            .returning(orm.WorkoutLogClarification.id)
+        )
+        if inserted_id is None:
+            existing = await self.get_pending_for_workout(user_id, workout_id)
+            if existing is None:
+                raise RuntimeError("Pending clarification conflict did not return a row")
+            return existing
+        model_value = await self._get(inserted_id, user_id)
+        if model_value is None:
+            raise RuntimeError("Created clarification could not be loaded")
+        return to_workout_log_clarification(model_value)
+
+    async def get_by_id(
+        self, clarification_id: UUID, user_id: UUID
+    ) -> WorkoutLogClarification | None:
+        model = await self._get(clarification_id, user_id)
+        return to_workout_log_clarification(model) if model is not None else None
+
+    async def get_for_update(
+        self, clarification_id: UUID, user_id: UUID
+    ) -> WorkoutLogClarification | None:
+        model = await self._get(clarification_id, user_id, for_update=True)
+        return to_workout_log_clarification(model) if model is not None else None
+
+    async def get_pending_for_workout(
+        self, user_id: UUID, workout_id: UUID
+    ) -> WorkoutLogClarification | None:
+        model = await self._session.scalar(
+            select(orm.WorkoutLogClarification).where(
+                orm.WorkoutLogClarification.user_id == user_id,
+                orm.WorkoutLogClarification.workout_id == workout_id,
+                orm.WorkoutLogClarification.status == "pending",
+            )
+        )
+        return to_workout_log_clarification(model) if model is not None else None
+
+    async def finish(
+        self,
+        clarification_id: UUID,
+        user_id: UUID,
+        *,
+        status: str,
+        terminal_at: datetime,
+    ) -> WorkoutLogClarification:
+        updated_id = await self._session.scalar(
+            update(orm.WorkoutLogClarification)
+            .where(
+                orm.WorkoutLogClarification.id == clarification_id,
+                orm.WorkoutLogClarification.user_id == user_id,
+                orm.WorkoutLogClarification.status == "pending",
+            )
+            .values(
+                status=status,
+                original_text=None,
+                clarification_message=None,
+                terminal_at=terminal_at,
+            )
+            .returning(orm.WorkoutLogClarification.id)
+        )
+        if updated_id is None:
+            existing = await self.get_by_id(clarification_id, user_id)
+            if existing is None:
+                raise RuntimeError("Clarification not found")
+            return existing
+        model = await self._get(updated_id, user_id)
+        if model is None:
+            raise RuntimeError("Finished clarification could not be loaded")
+        return to_workout_log_clarification(model)
+
+    async def cancel_pending_for_workout(
+        self,
+        user_id: UUID,
+        workout_id: UUID,
+        *,
+        terminal_at: datetime,
+    ) -> int:
+        result = await self._session.execute(
+            update(orm.WorkoutLogClarification)
+            .where(
+                orm.WorkoutLogClarification.user_id == user_id,
+                orm.WorkoutLogClarification.workout_id == workout_id,
+                orm.WorkoutLogClarification.status == "pending",
+            )
+            .values(
+                status="cancelled",
+                original_text=None,
+                clarification_message=None,
+                terminal_at=terminal_at,
+            )
+        )
+        return int(result.rowcount or 0)
 
 
 class SqlAlchemyProcessedCommandRepository:

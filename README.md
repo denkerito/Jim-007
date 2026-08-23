@@ -139,6 +139,9 @@ Open a private chat with your bot and try this flow:
 /start
 /workout today
 bench press 80x8 80x8 80x7
+bench press
+# bot: How many sets and reps, and with what load?
+55x8 55x6 55x6
 lat pulldown 70x10x3
 /status
 /end
@@ -164,7 +167,7 @@ An active workout remains a draft and is excluded from history until `/end` comp
 | `/newprogram` | Deactivate the current program days |
 | `/help` | Show the command summary |
 
-Workout text can contain multiple exercises. Compact notation such as `70x10x3` is expanded to three sets of 10 reps at 70 kg. Ambiguous input produces a clarification request instead of a database write.
+Workout text can contain multiple exercises. Compact notation such as `70x10x3` is expanded to three sets of 10 reps at 70 kg. Ambiguous input produces one clarification request instead of a database write. The next text message is the only follow-up; if the combined input is still unclear, the bot closes the clarification and asks for the complete exercise to be rewritten.
 
 ## Development and tests
 

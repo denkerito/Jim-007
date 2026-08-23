@@ -39,6 +39,11 @@ def _format_exercise(value: ExerciseSummary) -> str:
 
 
 def _format_workout_result(result: WorkoutEventResult) -> str:
+    if result.kind == "rewrite_required":
+        return (
+            result.clarification_message
+            or "Non riesco ancora a interpretarlo. Riscrivi l'intero esercizio."
+        )
     if result.kind == "needs_clarification":
         return result.clarification_message or "Puoi riformulare il messaggio?"
     if result.replayed:

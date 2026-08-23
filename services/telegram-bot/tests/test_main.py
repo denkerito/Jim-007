@@ -215,6 +215,28 @@ async def test_text_message_formats_persisted_exercises() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unclear_followup_requests_a_full_rewrite() -> None:
+    update, context, message, backend = _objects()
+    backend.process_workout_event.return_value = WorkoutEventResult(
+        kind="rewrite_required",
+        replayed=False,
+        performed_on=None,
+        exercises=(),
+        total_exercises=0,
+        total_sets=0,
+        clarification_message=(
+            "Non riesco ancora a interpretarlo. Riscrivi l'intero esercizio."
+        ),
+    )
+
+    await log_workout(update, context)
+
+    message.reply_text.assert_awaited_once_with(
+        "Non riesco ancora a interpretarlo. Riscrivi l'intero esercizio."
+    )
+
+
+@pytest.mark.asyncio
 async def test_missing_draft_has_actionable_message() -> None:
     update, context, message, backend = _objects()
     backend.process_workout_event.side_effect = BackendError(

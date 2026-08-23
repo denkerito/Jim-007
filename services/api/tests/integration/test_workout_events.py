@@ -1,18 +1,20 @@
 import asyncio
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from app.api.dependencies import get_uow_factory, get_workout_text_interpreter
 from app.application.commands import (
     InterpretedExercise,
+    FollowupInterpretationStatus,
     InterpretationStatus,
     PerformedSetInput,
     WorkoutDateInterpretation,
     WorkoutLogInterpretation,
+    WorkoutLogFollowupInterpretation,
 )
 from app.infrastructure.database.models import (
     Exercise,
@@ -20,12 +22,17 @@ from app.infrastructure.database.models import (
     ProcessedCommand,
     Workout,
     WorkoutExercise,
+    WorkoutLogClarification,
 )
 from app.infrastructure.database.uow import SqlAlchemyUnitOfWork
 from app.main import app
 
 
 class FakeInterpreter:
+    model_name = "fake-model"
+    workout_log_prompt_version = "workout-log-v2"
+    workout_log_followup_prompt_version = "workout-log-followup-v1"
+
     def __init__(self) -> None:
         self.date_result = WorkoutDateInterpretation(
             status=InterpretationStatus.READY,
@@ -52,6 +59,12 @@ class FakeInterpreter:
         )
         self.date_calls = 0
         self.log_calls = 0
+        self.followup_result = WorkoutLogFollowupInterpretation(
+            status=FollowupInterpretationStatus.READY,
+            exercises=self.log_result.exercises,
+        )
+        self.followup_calls = 0
+        self.followup_arguments = []
 
     async def interpret_date(self, **kwargs):
         self.date_calls += 1
@@ -60,6 +73,11 @@ class FakeInterpreter:
     async def interpret_exercises(self, **kwargs):
         self.log_calls += 1
         return self.log_result
+
+    async def interpret_exercise_followup(self, **kwargs):
+        self.followup_calls += 1
+        self.followup_arguments.append(kwargs)
+        return self.followup_result
 
 
 def _headers(key: str) -> dict[str, str]:
@@ -153,8 +171,8 @@ async def test_clarification_and_atomic_invalid_catalog_id_write_nothing(
             assert clarification.status_code == 200
             assert clarification.json()["kind"] == "needs_clarification"
 
-            interpreter.log_result = WorkoutLogInterpretation(
-                status=InterpretationStatus.READY,
+            interpreter.followup_result = WorkoutLogFollowupInterpretation(
+                status=FollowupInterpretationStatus.READY,
                 exercises=(
                     InterpretedExercise(
                         name="Squat",
@@ -178,6 +196,406 @@ async def test_clarification_and_atomic_invalid_catalog_id_write_nothing(
             assert await session.scalar(select(func.count()).select_from(Exercise)) == 0
             assert await session.scalar(select(func.count()).select_from(WorkoutExercise)) == 0
             assert await session.scalar(select(func.count()).select_from(PerformedSet)) == 0
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_single_followup_resolves_clarification_and_replays_without_new_llm_calls(
+    session_factory, telegram_identity_factory,
+) -> None:
+    interpreter = FakeInterpreter()
+    interpreter.log_result = WorkoutLogInterpretation(
+        status=InterpretationStatus.NEEDS_CLARIFICATION,
+        clarification_message="Quante serie e ripetizioni, e con quale carico?",
+    )
+    interpreter.followup_result = WorkoutLogFollowupInterpretation(
+        status=FollowupInterpretationStatus.READY,
+        exercises=(
+            InterpretedExercise(
+                name="Panca piana",
+                sets=(
+                    PerformedSetInput(repetitions=8, load_value="55"),
+                    PerformedSetInput(repetitions=6, load_value="55"),
+                    PerformedSetInput(repetitions=6, load_value="55"),
+                ),
+            ),
+        ),
+    )
+    app.dependency_overrides[get_uow_factory] = lambda: lambda: SqlAlchemyUnitOfWork(
+        session_factory
+    )
+    app.dependency_overrides[get_workout_text_interpreter] = lambda: interpreter
+    transport = ASGITransport(app=app)
+    await telegram_identity_factory(44444)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            base = {"provider": "telegram", "provider_subject": "44444"}
+            await client.post(
+                "/internal/workout-events",
+                headers=_headers("clarification-open"),
+                json={**base, "action": "open", "text": None},
+            )
+            first = await client.post(
+                "/internal/workout-events",
+                headers=_headers("clarification-first"),
+                json={**base, "action": "log", "text": "panca piana"},
+            )
+            assert first.status_code == 200, first.text
+            assert first.json()["kind"] == "needs_clarification"
+
+            first_replay = await client.post(
+                "/internal/workout-events",
+                headers=_headers("clarification-first"),
+                json={**base, "action": "log", "text": "panca piana"},
+            )
+            assert first_replay.status_code == 200
+            assert first_replay.json()["kind"] == "needs_clarification"
+            assert first_replay.json()["replayed"] is True
+            assert interpreter.log_calls == 1
+
+            resolved = await client.post(
+                "/internal/workout-events",
+                headers=_headers("clarification-answer"),
+                json={**base, "action": "log", "text": "55x8 55x6 55x6"},
+            )
+            assert resolved.status_code == 200, resolved.text
+            assert resolved.json()["kind"] == "logged"
+            assert len(resolved.json()["added_exercises"][0]["sets"]) == 3
+            assert interpreter.followup_calls == 1
+            assert interpreter.followup_arguments[0]["original_text"] == "panca piana"
+
+            resolved_replay = await client.post(
+                "/internal/workout-events",
+                headers=_headers("clarification-answer"),
+                json={**base, "action": "log", "text": "55x8 55x6 55x6"},
+            )
+            assert resolved_replay.status_code == 200
+            assert resolved_replay.json()["replayed"] is True
+            assert interpreter.followup_calls == 1
+
+            initial_after_resolution = await client.post(
+                "/internal/workout-events",
+                headers=_headers("clarification-first"),
+                json={**base, "action": "log", "text": "panca piana"},
+            )
+            assert initial_after_resolution.json()["kind"] == "logged"
+            assert initial_after_resolution.json()["replayed"] is True
+
+        async with session_factory() as session:
+            stored = await session.scalar(select(WorkoutLogClarification))
+            assert stored is not None
+            assert stored.status == "resolved"
+            assert stored.original_text is None
+            assert stored.clarification_message is None
+            assert await session.scalar(select(func.count()).select_from(PerformedSet)) == 3
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_unclear_followup_requires_full_rewrite_and_next_message_starts_fresh(
+    session_factory, telegram_identity_factory,
+) -> None:
+    interpreter = FakeInterpreter()
+    interpreter.log_result = WorkoutLogInterpretation(
+        status=InterpretationStatus.NEEDS_CLARIFICATION,
+        clarification_message="Quante serie e ripetizioni?",
+    )
+    interpreter.followup_result = WorkoutLogFollowupInterpretation(
+        status=FollowupInterpretationStatus.REWRITE_REQUIRED
+    )
+    app.dependency_overrides[get_uow_factory] = lambda: lambda: SqlAlchemyUnitOfWork(
+        session_factory
+    )
+    app.dependency_overrides[get_workout_text_interpreter] = lambda: interpreter
+    transport = ASGITransport(app=app)
+    await telegram_identity_factory(55555)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            base = {"provider": "telegram", "provider_subject": "55555"}
+            await client.post(
+                "/internal/workout-events",
+                headers=_headers("rewrite-open"),
+                json={**base, "action": "open", "text": None},
+            )
+            await client.post(
+                "/internal/workout-events",
+                headers=_headers("rewrite-first"),
+                json={**base, "action": "log", "text": "panca"},
+            )
+            unclear = await client.post(
+                "/internal/workout-events",
+                headers=_headers("rewrite-answer"),
+                json={**base, "action": "log", "text": "pesante"},
+            )
+            assert unclear.status_code == 200, unclear.text
+            assert unclear.json() == {
+                "kind": "rewrite_required",
+                "replayed": False,
+                "workout": None,
+                "added_exercises": [],
+                "removed_exercises": [],
+                "clarification_message": (
+                    "Non riesco ancora a interpretarlo. Riscrivi l'intero esercizio."
+                ),
+                "program_history": [],
+            }
+
+            interpreter.log_result = WorkoutLogInterpretation(
+                status=InterpretationStatus.READY,
+                exercises=(
+                    InterpretedExercise(
+                        name="Panca piana",
+                        sets=(PerformedSetInput(repetitions=8, load_value="55"),),
+                    ),
+                ),
+            )
+            fresh = await client.post(
+                "/internal/workout-events",
+                headers=_headers("rewrite-fresh"),
+                json={**base, "action": "log", "text": "panca piana 55x8"},
+            )
+            assert fresh.status_code == 200, fresh.text
+            assert fresh.json()["kind"] == "logged"
+            assert interpreter.log_calls == 2
+            assert interpreter.followup_calls == 1
+
+        async with session_factory() as session:
+            stored = await session.scalar(select(WorkoutLogClarification))
+            assert stored is not None
+            assert stored.status == "rewrite_required"
+            assert stored.original_text is None
+            assert stored.clarification_message is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_expired_clarification_is_scrubbed_and_new_text_is_a_fresh_log(
+    session_factory, telegram_identity_factory,
+) -> None:
+    interpreter = FakeInterpreter()
+    interpreter.log_result = WorkoutLogInterpretation(
+        status=InterpretationStatus.NEEDS_CLARIFICATION,
+        clarification_message="Quale esercizio?",
+    )
+    app.dependency_overrides[get_uow_factory] = lambda: lambda: SqlAlchemyUnitOfWork(
+        session_factory
+    )
+    app.dependency_overrides[get_workout_text_interpreter] = lambda: interpreter
+    transport = ASGITransport(app=app)
+    await telegram_identity_factory(66666)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            base = {"provider": "telegram", "provider_subject": "66666"}
+            await client.post(
+                "/internal/workout-events",
+                headers=_headers("expired-open"),
+                json={**base, "action": "open", "text": None},
+            )
+            await client.post(
+                "/internal/workout-events",
+                headers=_headers("expired-first"),
+                json={**base, "action": "log", "text": "55x8"},
+            )
+            past = datetime.now(timezone.utc) - timedelta(hours=1)
+            async with session_factory() as session:
+                await session.execute(
+                    update(WorkoutLogClarification).values(
+                        created_at=past - timedelta(minutes=15),
+                        expires_at=past,
+                    )
+                )
+                await session.commit()
+
+            interpreter.log_result = WorkoutLogInterpretation(
+                status=InterpretationStatus.READY,
+                exercises=(
+                    InterpretedExercise(
+                        name="Panca piana",
+                        sets=(PerformedSetInput(repetitions=8, load_value="55"),),
+                    ),
+                ),
+            )
+            fresh = await client.post(
+                "/internal/workout-events",
+                headers=_headers("expired-fresh"),
+                json={**base, "action": "log", "text": "panca piana 55x8"},
+            )
+            assert fresh.status_code == 200, fresh.text
+            assert fresh.json()["kind"] == "logged"
+            assert interpreter.followup_calls == 0
+            assert interpreter.log_calls == 2
+
+        async with session_factory() as session:
+            stored = await session.scalar(select(WorkoutLogClarification))
+            assert stored is not None
+            assert stored.status == "expired"
+            assert stored.original_text is None
+            assert stored.clarification_message is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["undo", "complete"])
+async def test_successful_workout_mutation_cancels_pending_clarification(
+    action, session_factory, telegram_identity_factory,
+) -> None:
+    interpreter = FakeInterpreter()
+    app.dependency_overrides[get_uow_factory] = lambda: lambda: SqlAlchemyUnitOfWork(
+        session_factory
+    )
+    app.dependency_overrides[get_workout_text_interpreter] = lambda: interpreter
+    transport = ASGITransport(app=app)
+    await telegram_identity_factory(77770 if action == "undo" else 77771)
+    try:
+        subject = "77770" if action == "undo" else "77771"
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            base = {"provider": "telegram", "provider_subject": subject}
+            await client.post(
+                "/internal/workout-events",
+                headers=_headers(f"{action}-open"),
+                json={**base, "action": "open", "text": None},
+            )
+            await client.post(
+                "/internal/workout-events",
+                headers=_headers(f"{action}-logged"),
+                json={**base, "action": "log", "text": "panca 80x8"},
+            )
+            interpreter.log_result = WorkoutLogInterpretation(
+                status=InterpretationStatus.NEEDS_CLARIFICATION,
+                clarification_message="Quante ripetizioni?",
+            )
+            pending = await client.post(
+                "/internal/workout-events",
+                headers=_headers(f"{action}-pending"),
+                json={**base, "action": "log", "text": "squat"},
+            )
+            assert pending.json()["kind"] == "needs_clarification"
+
+            mutated = await client.post(
+                "/internal/workout-events",
+                headers=_headers(f"{action}-mutation"),
+                json={**base, "action": action, "text": None},
+            )
+            assert mutated.status_code == 200, mutated.text
+
+        async with session_factory() as session:
+            stored = await session.scalar(select(WorkoutLogClarification))
+            assert stored is not None
+            assert stored.status == "cancelled"
+            assert stored.original_text is None
+            assert stored.clarification_message is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_direct_exercise_add_cancels_pending_clarification(
+    session_factory, telegram_identity_factory,
+) -> None:
+    interpreter = FakeInterpreter()
+    app.dependency_overrides[get_uow_factory] = lambda: lambda: SqlAlchemyUnitOfWork(
+        session_factory
+    )
+    app.dependency_overrides[get_workout_text_interpreter] = lambda: interpreter
+    transport = ASGITransport(app=app)
+    user_id = await telegram_identity_factory(77772)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            base = {"provider": "telegram", "provider_subject": "77772"}
+            opened = await client.post(
+                "/internal/workout-events",
+                headers=_headers("direct-add-open"),
+                json={**base, "action": "open", "text": None},
+            )
+            workout_id = opened.json()["workout"]["id"]
+            interpreter.log_result = WorkoutLogInterpretation(
+                status=InterpretationStatus.NEEDS_CLARIFICATION,
+                clarification_message="Quante ripetizioni?",
+            )
+            await client.post(
+                "/internal/workout-events",
+                headers=_headers("direct-add-pending"),
+                json={**base, "action": "log", "text": "squat"},
+            )
+
+            added = await client.post(
+                f"/users/{user_id}/workouts/{workout_id}/exercises",
+                headers=_headers("direct-add-exercise"),
+                json={
+                    "exercise": {"kind": "new", "name": "Squat"},
+                    "sets": [{"repetitions": 5, "load_value": "100"}],
+                },
+            )
+            assert added.status_code == 201, added.text
+
+        async with session_factory() as session:
+            stored = await session.scalar(select(WorkoutLogClarification))
+            assert stored is not None and stored.status == "cancelled"
+            assert stored.original_text is None
+            assert stored.clarification_message is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_followups_persist_only_once(
+    session_factory, telegram_identity_factory,
+) -> None:
+    interpreter = FakeInterpreter()
+    interpreter.log_result = WorkoutLogInterpretation(
+        status=InterpretationStatus.NEEDS_CLARIFICATION,
+        clarification_message="Quante ripetizioni e con quale carico?",
+    )
+    interpreter.followup_result = WorkoutLogFollowupInterpretation(
+        status=FollowupInterpretationStatus.READY,
+        exercises=(
+            InterpretedExercise(
+                name="Panca piana",
+                sets=(PerformedSetInput(repetitions=8, load_value="55"),),
+            ),
+        ),
+    )
+    app.dependency_overrides[get_uow_factory] = lambda: lambda: SqlAlchemyUnitOfWork(
+        session_factory
+    )
+    app.dependency_overrides[get_workout_text_interpreter] = lambda: interpreter
+    transport = ASGITransport(app=app)
+    await telegram_identity_factory(88888)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            base = {"provider": "telegram", "provider_subject": "88888"}
+            await client.post(
+                "/internal/workout-events",
+                headers=_headers("concurrent-followup-open"),
+                json={**base, "action": "open", "text": None},
+            )
+            await client.post(
+                "/internal/workout-events",
+                headers=_headers("concurrent-followup-first"),
+                json={**base, "action": "log", "text": "panca piana"},
+            )
+            first, second = await asyncio.gather(
+                client.post(
+                    "/internal/workout-events",
+                    headers=_headers("concurrent-followup-a"),
+                    json={**base, "action": "log", "text": "55x8"},
+                ),
+                client.post(
+                    "/internal/workout-events",
+                    headers=_headers("concurrent-followup-b"),
+                    json={**base, "action": "log", "text": "55x8"},
+                ),
+            )
+            assert sorted((first.status_code, second.status_code)) == [200, 409]
+
+        async with session_factory() as session:
+            assert await session.scalar(select(func.count()).select_from(PerformedSet)) == 1
+            stored = await session.scalar(select(WorkoutLogClarification))
+            assert stored is not None and stored.status == "resolved"
     finally:
         app.dependency_overrides.clear()
 

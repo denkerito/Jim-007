@@ -64,6 +64,11 @@ class InterpretationStatus(StrEnum):
     NEEDS_CLARIFICATION = "needs_clarification"
 
 
+class FollowupInterpretationStatus(StrEnum):
+    READY = "ready"
+    REWRITE_REQUIRED = "rewrite_required"
+
+
 class ExerciseResolutionStatus(StrEnum):
     MATCHED = "matched"
     NOT_FOUND = "not_found"
@@ -241,6 +246,20 @@ class WorkoutLogInterpretation(CommandModel):
         return self
 
 
+class WorkoutLogFollowupInterpretation(CommandModel):
+    status: FollowupInterpretationStatus
+    exercises: tuple[InterpretedExercise, ...] = ()
+
+    @model_validator(mode="after")
+    def status_must_match_payload(self) -> "WorkoutLogFollowupInterpretation":
+        if self.status is FollowupInterpretationStatus.READY:
+            if not self.exercises:
+                raise ValueError("a ready follow-up requires exercises")
+        elif self.exercises:
+            raise ValueError("a rewrite-required follow-up cannot contain exercises")
+        return self
+
+
 class CreateWorkoutCommand(CommandModel):
     user_id: UUID
     idempotency_key: str = Field(min_length=1, max_length=255)
@@ -304,6 +323,7 @@ class LogWorkoutMessageCommand(CommandModel):
     idempotency_key: str = Field(min_length=1, max_length=255)
     request_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     exercises: tuple[InterpretedExercise, ...] = Field(min_length=1)
+    clarification_id: UUID | None = None
 
 
 class CompleteWorkoutCommand(CommandModel):
@@ -437,6 +457,7 @@ class WorkoutEventResult:
         "cancelled",
         "undone",
         "needs_clarification",
+        "rewrite_required",
     ]
     workout: Workout | None = None
     added_exercises: tuple[WorkoutExercise, ...] = ()

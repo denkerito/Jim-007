@@ -1,7 +1,8 @@
 """Provider-neutral orchestration for workout events received from chat adapters."""
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Literal
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from app.application.commands import (
@@ -10,6 +11,7 @@ from app.application.commands import (
     CreateWorkoutCommand,
     ExerciseCatalogItem,
     InterpretationStatus,
+    FollowupInterpretationStatus,
     LogWorkoutMessageCommand,
     ProcessWorkoutEventCommand,
     UndoWorkoutMessageCommand,
@@ -21,7 +23,12 @@ from app.application.commands import (
     ProgramExerciseResolutionInput,
 )
 from app.application.idempotency import CommandOperation, verify_replay
-from app.application.ports import ProcessedCommand, UnitOfWorkFactory, WorkoutTextInterpreter
+from app.application.ports import (
+    ProcessedCommand,
+    UnitOfWork,
+    UnitOfWorkFactory,
+    WorkoutTextInterpreter,
+)
 from app.application.services import (
     CancelWorkout,
     CompleteWorkout,
@@ -35,8 +42,15 @@ from app.domain.exceptions import (
     NoActiveWorkoutError,
     NotFoundError,
     LlmInvalidResponseError,
+    IdempotencyConflictError,
 )
-from app.domain.models import Exercise, ProgramWorkout, User, Workout
+from app.domain.models import Exercise, ProgramWorkout, User, Workout, WorkoutStatus
+from app.domain.models import WorkoutLogClarification, WorkoutLogClarificationStatus
+
+
+REWRITE_REQUIRED_MESSAGE = (
+    "Non riesco ancora a interpretarlo. Riscrivi l'intero esercizio."
+)
 
 
 class ProcessWorkoutEvent:
@@ -44,9 +58,12 @@ class ProcessWorkoutEvent:
         self,
         uow_factory: UnitOfWorkFactory,
         interpreter: WorkoutTextInterpreter,
+        *,
+        clarification_ttl_seconds: int = 900,
     ) -> None:
         self._uow_factory = uow_factory
         self._interpreter = interpreter
+        self._clarification_ttl = timedelta(seconds=clarification_ttl_seconds)
 
     async def execute(self, command: ProcessWorkoutEventCommand) -> WorkoutEventResult:
         async with self._uow_factory() as uow:
@@ -63,42 +80,7 @@ class ProcessWorkoutEvent:
             active = await uow.workouts.get_active_draft(user.id)
             existing = await uow.processed_commands.get(command.idempotency_key)
             if existing is not None:
-                operations = {
-                    WorkoutEventAction.OPEN: CommandOperation.CREATE_WORKOUT,
-                    WorkoutEventAction.LOG: CommandOperation.LOG_WORKOUT_MESSAGE,
-                    WorkoutEventAction.COMPLETE: CommandOperation.COMPLETE_WORKOUT,
-                    WorkoutEventAction.CANCEL: CommandOperation.CANCEL_WORKOUT,
-                    WorkoutEventAction.UNDO: CommandOperation.UNDO_WORKOUT_MESSAGE,
-                }
-                requested = ProcessedCommand(
-                    idempotency_key=command.idempotency_key,
-                    user_id=user.id,
-                    operation=operations[command.action],
-                    request_hash=command.request_hash,
-                    resource_id=existing.resource_id,
-                )
-                verify_replay(existing, requested)
-                if command.action is WorkoutEventAction.CANCEL:
-                    return WorkoutEventResult(kind="cancelled", replayed=True)
-                replayed_workout = await uow.workouts.get_by_id(
-                    existing.resource_id, user.id
-                )
-                if replayed_workout is None:
-                    raise NotFoundError("The previously processed workout no longer exists")
-                kinds: dict[
-                    WorkoutEventAction,
-                    Literal["opened", "logged", "completed", "undone"],
-                ] = {
-                    WorkoutEventAction.OPEN: "opened",
-                    WorkoutEventAction.LOG: "logged",
-                    WorkoutEventAction.COMPLETE: "completed",
-                    WorkoutEventAction.UNDO: "undone",
-                }
-                return WorkoutEventResult(
-                    kind=kinds[command.action],
-                    workout=replayed_workout,
-                    replayed=True,
-                )
+                return await self._replay(uow, command, user, existing)
             catalog_values = (
                 await uow.exercises.list_for_user(user.id)
                 if command.action is WorkoutEventAction.LOG
@@ -113,6 +95,25 @@ class ProcessWorkoutEvent:
             if command.action is WorkoutEventAction.LOG:
                 if active is None:
                     raise NoActiveWorkoutError("Open a workout with /workout first")
+                pending_clarification = (
+                    await uow.workout_log_clarifications.get_pending_for_workout(
+                        user.id, active.id
+                    )
+                )
+                if (
+                    pending_clarification is not None
+                    and pending_clarification.expires_at <= datetime.now(timezone.utc)
+                ):
+                    await uow.workout_log_clarifications.finish(
+                        pending_clarification.id,
+                        user.id,
+                        status=WorkoutLogClarificationStatus.EXPIRED.value,
+                        terminal_at=datetime.now(timezone.utc),
+                    )
+                    await uow.commit()
+                    pending_clarification = None
+            else:
+                pending_clarification = None
         context = WorkoutInterpretationContext(
             locale=user.locale,
             timezone=user.timezone,
@@ -171,7 +172,126 @@ class ProcessWorkoutEvent:
                 replayed=result.replayed,
             )
 
-        return await self._log(command, user, active, context, catalog_values)
+        return await self._log(
+            command,
+            user,
+            active,
+            context,
+            catalog_values,
+            pending_clarification,
+        )
+
+    async def _replay(
+        self,
+        uow: UnitOfWork,
+        command: ProcessWorkoutEventCommand,
+        user: User,
+        existing: ProcessedCommand,
+    ) -> WorkoutEventResult:
+        clarification_operations = {
+            CommandOperation.REQUEST_WORKOUT_LOG_CLARIFICATION,
+            CommandOperation.REQUIRE_WORKOUT_LOG_REWRITE,
+        }
+        if existing.operation in clarification_operations:
+            if command.action is not WorkoutEventAction.LOG:
+                requested_operation = CommandOperation.LOG_WORKOUT_MESSAGE
+            else:
+                requested_operation = existing.operation
+            verify_replay(
+                existing,
+                ProcessedCommand(
+                    idempotency_key=command.idempotency_key,
+                    user_id=user.id,
+                    operation=requested_operation,
+                    request_hash=command.request_hash,
+                    resource_id=existing.resource_id,
+                ),
+            )
+            clarification = await uow.workout_log_clarifications.get_by_id(
+                existing.resource_id, user.id
+            )
+            if clarification is None:
+                raise NotFoundError(
+                    "The previously processed clarification no longer exists"
+                )
+            if (
+                existing.operation
+                == CommandOperation.REQUEST_WORKOUT_LOG_CLARIFICATION
+                and clarification.status is WorkoutLogClarificationStatus.PENDING
+            ):
+                if clarification.expires_at <= datetime.now(timezone.utc):
+                    await uow.workout_log_clarifications.finish(
+                        clarification.id,
+                        user.id,
+                        status=WorkoutLogClarificationStatus.EXPIRED.value,
+                        terminal_at=datetime.now(timezone.utc),
+                    )
+                    await uow.commit()
+                    return WorkoutEventResult(
+                        kind="rewrite_required",
+                        clarification_message=REWRITE_REQUIRED_MESSAGE,
+                        replayed=True,
+                    )
+                return WorkoutEventResult(
+                    kind="needs_clarification",
+                    clarification_message=clarification.clarification_message,
+                    replayed=True,
+                )
+            if clarification.status is WorkoutLogClarificationStatus.RESOLVED:
+                workout = await uow.workouts.get_by_id(
+                    clarification.workout_id, user.id
+                )
+                if workout is None:
+                    raise NotFoundError(
+                        "The previously processed workout no longer exists"
+                    )
+                return WorkoutEventResult(
+                    kind="logged", workout=workout, replayed=True
+                )
+            return WorkoutEventResult(
+                kind="rewrite_required",
+                clarification_message=REWRITE_REQUIRED_MESSAGE,
+                replayed=True,
+            )
+
+        operations = {
+            WorkoutEventAction.OPEN: CommandOperation.CREATE_WORKOUT,
+            WorkoutEventAction.LOG: CommandOperation.LOG_WORKOUT_MESSAGE,
+            WorkoutEventAction.COMPLETE: CommandOperation.COMPLETE_WORKOUT,
+            WorkoutEventAction.CANCEL: CommandOperation.CANCEL_WORKOUT,
+            WorkoutEventAction.UNDO: CommandOperation.UNDO_WORKOUT_MESSAGE,
+        }
+        verify_replay(
+            existing,
+            ProcessedCommand(
+                idempotency_key=command.idempotency_key,
+                user_id=user.id,
+                operation=operations[command.action],
+                request_hash=command.request_hash,
+                resource_id=existing.resource_id,
+            ),
+        )
+        if command.action is WorkoutEventAction.CANCEL:
+            return WorkoutEventResult(kind="cancelled", replayed=True)
+        replayed_workout = await uow.workouts.get_by_id(
+            existing.resource_id, user.id
+        )
+        if replayed_workout is None:
+            raise NotFoundError("The previously processed workout no longer exists")
+        kinds: dict[
+            WorkoutEventAction,
+            Literal["opened", "logged", "completed", "undone"],
+        ] = {
+            WorkoutEventAction.OPEN: "opened",
+            WorkoutEventAction.LOG: "logged",
+            WorkoutEventAction.COMPLETE: "completed",
+            WorkoutEventAction.UNDO: "undone",
+        }
+        return WorkoutEventResult(
+            kind=kinds[command.action],
+            workout=replayed_workout,
+            replayed=True,
+        )
 
     async def _open(
         self,
@@ -287,29 +407,60 @@ class ProcessWorkoutEvent:
         active: Workout | None,
         context: WorkoutInterpretationContext,
         catalog_values: tuple[Exercise, ...],
+        pending_clarification: WorkoutLogClarification | None,
     ) -> WorkoutEventResult:
         if active is None:  # Defensive: execute checked this before the LLM call.
             raise NoActiveWorkoutError("Open a workout with /workout first")
-        interpretation = await self._interpreter.interpret_exercises(
-            text=(command.text or "").strip(),
-            context=context,
-            catalog=tuple(
-                ExerciseCatalogItem(id=exercise.id, name=exercise.name)
-                for exercise in catalog_values
-            ),
+        catalog = tuple(
+            ExerciseCatalogItem(id=exercise.id, name=exercise.name)
+            for exercise in catalog_values
         )
-        if interpretation.status is InterpretationStatus.NEEDS_CLARIFICATION:
-            return WorkoutEventResult(
-                kind="needs_clarification",
-                clarification_message=interpretation.clarification_message,
+        text = (command.text or "").strip()
+        if pending_clarification is not None:
+            if (
+                pending_clarification.original_text is None
+                or pending_clarification.clarification_message is None
+            ):
+                raise RuntimeError("Pending clarification is missing its transcript")
+            followup = await self._interpreter.interpret_exercise_followup(
+                original_text=pending_clarification.original_text,
+                clarification_message=pending_clarification.clarification_message,
+                answer_text=text,
+                context=context,
+                catalog=catalog,
             )
+            if followup.status is FollowupInterpretationStatus.REWRITE_REQUIRED:
+                return await self._require_rewrite(
+                    command, user, pending_clarification
+                )
+            exercises = followup.exercises
+            clarification_id = pending_clarification.id
+        else:
+            interpretation = await self._interpreter.interpret_exercises(
+                text=text,
+                context=context,
+                catalog=catalog,
+            )
+            if interpretation.status is InterpretationStatus.NEEDS_CLARIFICATION:
+                return await self._create_clarification(
+                    command,
+                    user,
+                    active,
+                    text,
+                    interpretation.clarification_message
+                    or "Quali dati mancano per completare l'esercizio?",
+                )
+            exercises = interpretation.exercises
+            clarification_id = None
+
         result = await LogWorkoutMessage(self._uow_factory).execute(
             LogWorkoutMessageCommand(
                 user_id=user.id,
                 workout_id=active.id,
                 idempotency_key=command.idempotency_key,
                 request_hash=command.request_hash,
-                exercises=interpretation.exercises,
+                exercises=exercises,
+                clarification_id=clarification_id,
             )
         )
         return WorkoutEventResult(
@@ -317,4 +468,105 @@ class ProcessWorkoutEvent:
             workout=result.workout,
             added_exercises=result.added_exercises,
             replayed=result.replayed,
+        )
+
+    async def _create_clarification(
+        self,
+        command: ProcessWorkoutEventCommand,
+        user: User,
+        active: Workout,
+        original_text: str,
+        clarification_message: str,
+    ) -> WorkoutEventResult:
+        clarification_id = uuid4()
+        created_at = datetime.now(timezone.utc)
+        async with self._uow_factory() as uow:
+            workout = await uow.workouts.get_for_update(active.id, user.id)
+            if workout is None or workout.status is not WorkoutStatus.DRAFT:
+                raise NoActiveWorkoutError("Open a workout with /workout first")
+            clarification = await uow.workout_log_clarifications.create(
+                clarification_id=clarification_id,
+                user_id=user.id,
+                workout_id=workout.id,
+                original_text=original_text,
+                clarification_message=clarification_message,
+                model=getattr(self._interpreter, "model_name", "unknown"),
+                initial_prompt_version=getattr(
+                    self._interpreter, "workout_log_prompt_version", "workout-log-v2"
+                ),
+                followup_prompt_version=getattr(
+                    self._interpreter,
+                    "workout_log_followup_prompt_version",
+                    "workout-log-followup-v1",
+                ),
+                created_at=created_at,
+                expires_at=created_at + self._clarification_ttl,
+            )
+            requested = ProcessedCommand(
+                idempotency_key=command.idempotency_key,
+                user_id=user.id,
+                operation=CommandOperation.REQUEST_WORKOUT_LOG_CLARIFICATION,
+                request_hash=command.request_hash,
+                resource_id=clarification.id,
+            )
+            if clarification.id != clarification_id:
+                existing = await uow.processed_commands.get(command.idempotency_key)
+                if existing is None:
+                    raise IdempotencyConflictError(
+                        "Another workout clarification is already pending"
+                    )
+                return await self._replay(uow, command, user, existing)
+            if not await uow.processed_commands.claim(requested):
+                existing = await uow.processed_commands.get(command.idempotency_key)
+                if existing is None:
+                    raise IdempotencyConflictError(
+                        "Idempotency claim disappeared unexpectedly"
+                    )
+                return await self._replay(uow, command, user, existing)
+            await uow.commit()
+        return WorkoutEventResult(
+            kind="needs_clarification",
+            clarification_message=clarification_message,
+        )
+
+    async def _require_rewrite(
+        self,
+        command: ProcessWorkoutEventCommand,
+        user: User,
+        clarification: WorkoutLogClarification,
+    ) -> WorkoutEventResult:
+        requested = ProcessedCommand(
+            idempotency_key=command.idempotency_key,
+            user_id=user.id,
+            operation=CommandOperation.REQUIRE_WORKOUT_LOG_REWRITE,
+            request_hash=command.request_hash,
+            resource_id=clarification.id,
+        )
+        async with self._uow_factory() as uow:
+            if not await uow.processed_commands.claim(requested):
+                existing = await uow.processed_commands.get(command.idempotency_key)
+                if existing is None:
+                    raise IdempotencyConflictError(
+                        "Idempotency claim disappeared unexpectedly"
+                    )
+                return await self._replay(uow, command, user, existing)
+            locked = await uow.workout_log_clarifications.get_for_update(
+                clarification.id, user.id
+            )
+            if locked is None:
+                raise NotFoundError("Workout clarification not found")
+            if locked.status is not WorkoutLogClarificationStatus.PENDING:
+                raise IdempotencyConflictError(
+                    "The workout clarification is no longer pending"
+                )
+            await uow.workout_log_clarifications.finish(
+                locked.id,
+                user.id,
+                status=WorkoutLogClarificationStatus.REWRITE_REQUIRED.value,
+                terminal_at=datetime.now(timezone.utc),
+            )
+            await uow.commit()
+        return WorkoutEventResult(
+            kind="rewrite_required",
+            clarification_message=REWRITE_REQUIRED_MESSAGE,
         )

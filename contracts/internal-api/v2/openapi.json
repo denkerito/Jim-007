@@ -916,7 +916,8 @@
               "completed",
               "cancelled",
               "undone",
-              "needs_clarification"
+              "needs_clarification",
+              "rewrite_required"
             ],
             "title": "Kind",
             "type": "string"

@@ -16,6 +16,7 @@ from app.application.commands import (
     WorkoutDateInterpretation,
     WorkoutInterpretationContext,
     WorkoutLogInterpretation,
+    WorkoutLogFollowupInterpretation,
     ProgramWorkoutCatalogItem,
     ProgramWorkoutInterpretation,
     WorkoutStartInterpretation,
@@ -30,6 +31,7 @@ from app.domain.models import (
     LoadUnit,
     User,
     Workout,
+    WorkoutLogClarification,
     WorkoutExercise,
     ProgramWorkout,
     TelegramLinkRequest,
@@ -242,6 +244,43 @@ class ProcessedCommandRepository(Protocol):
     async def get(self, idempotency_key: str) -> ProcessedCommand | None: ...
 
 
+class WorkoutLogClarificationRepository(Protocol):
+    async def create(
+        self,
+        *,
+        clarification_id: UUID,
+        user_id: UUID,
+        workout_id: UUID,
+        original_text: str,
+        clarification_message: str,
+        model: str,
+        initial_prompt_version: str,
+        followup_prompt_version: str,
+        created_at: datetime,
+        expires_at: datetime,
+    ) -> WorkoutLogClarification: ...
+
+    async def get_by_id(
+        self, clarification_id: UUID, user_id: UUID
+    ) -> WorkoutLogClarification | None: ...
+
+    async def get_for_update(
+        self, clarification_id: UUID, user_id: UUID
+    ) -> WorkoutLogClarification | None: ...
+
+    async def get_pending_for_workout(
+        self, user_id: UUID, workout_id: UUID
+    ) -> WorkoutLogClarification | None: ...
+
+    async def finish(
+        self, clarification_id: UUID, user_id: UUID, *, status: str, terminal_at: datetime
+    ) -> WorkoutLogClarification: ...
+
+    async def cancel_pending_for_workout(
+        self, user_id: UUID, workout_id: UUID, *, terminal_at: datetime
+    ) -> int: ...
+
+
 class UnitOfWork(Protocol):
     users: UserRepository
     external_identities: ExternalIdentityRepository
@@ -253,6 +292,7 @@ class UnitOfWork(Protocol):
     workouts: WorkoutRepository
     program_workouts: ProgramWorkoutRepository
     processed_commands: ProcessedCommandRepository
+    workout_log_clarifications: WorkoutLogClarificationRepository
 
     async def __aenter__(self) -> "UnitOfWork": ...
 
@@ -267,6 +307,15 @@ UnitOfWorkFactory = Callable[[], UnitOfWork]
 
 
 class WorkoutTextInterpreter(Protocol):
+    @property
+    def model_name(self) -> str: ...
+
+    @property
+    def workout_log_prompt_version(self) -> str: ...
+
+    @property
+    def workout_log_followup_prompt_version(self) -> str: ...
+
     async def interpret_date(
         self,
         *,
@@ -296,6 +345,16 @@ class WorkoutTextInterpreter(Protocol):
         context: WorkoutInterpretationContext,
         catalog: tuple[ExerciseCatalogItem, ...],
     ) -> WorkoutLogInterpretation: ...
+
+    async def interpret_exercise_followup(
+        self,
+        *,
+        original_text: str,
+        clarification_message: str,
+        answer_text: str,
+        context: WorkoutInterpretationContext,
+        catalog: tuple[ExerciseCatalogItem, ...],
+    ) -> WorkoutLogFollowupInterpretation: ...
 
 
 class ExerciseQueryInterpreter(Protocol):

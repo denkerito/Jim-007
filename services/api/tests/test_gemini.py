@@ -8,6 +8,7 @@ from app.application.commands import (
     ExerciseCatalogItem,
     ExerciseQueryInterpretation,
     ExerciseResolutionStatus,
+    FollowupInterpretationStatus,
     InterpretationStatus,
     InterpretedExercise,
     PerformedSetInput,
@@ -18,6 +19,7 @@ from app.application.commands import (
     ProgramWorkoutInterpretation,
     WorkoutInterpretationContext,
     WorkoutLogInterpretation,
+    WorkoutLogFollowupInterpretation,
 )
 from app.domain.exceptions import LlmInvalidResponseError, LlmTimeoutError
 from app.domain.models import LoadUnit
@@ -82,6 +84,8 @@ async def test_gemini_uses_interactions_structured_output_without_storage(monkey
     }
     assert kwargs["response_format"]["mime_type"] == "application/json"
     assert "panca 80x8" in kwargs["input"]
+    assert "una sola domanda" in kwargs["input"]
+    assert adapter.workout_log_prompt_version == "workout-log-v2"
 
 
 @pytest.mark.asyncio
@@ -201,3 +205,41 @@ async def test_gemini_program_clarification_ignores_partial_exercises(monkeypatc
 
     assert result.status is InterpretationStatus.NEEDS_CLARIFICATION
     assert result.clarification_message == "Quante serie e ripetizioni per la lat machine?"
+
+
+@pytest.mark.asyncio
+async def test_gemini_followup_returns_terminal_full_payload(monkeypatch) -> None:
+    expected = WorkoutLogFollowupInterpretation(
+        status=FollowupInterpretationStatus.READY,
+        exercises=(
+            InterpretedExercise(
+                name="Panca piana",
+                sets=(
+                    PerformedSetInput(repetitions=8, load_value="55"),
+                    PerformedSetInput(repetitions=6, load_value="55"),
+                    PerformedSetInput(repetitions=6, load_value="55"),
+                ),
+            ),
+        ),
+    )
+    client, create = _fake_client(expected.model_dump_json())
+    monkeypatch.setattr("app.infrastructure.llm.gemini.genai.Client", lambda **_: client)
+    adapter = GeminiWorkoutTextInterpreter(
+        api_key="secret", model="gemini-3.5-flash-lite",
+        timeout_seconds=8, max_output_tokens=4096, thinking_level="minimal",
+    )
+
+    result = await adapter.interpret_exercise_followup(
+        original_text="panca piana",
+        clarification_message="Quante serie e ripetizioni, e con quale carico?",
+        answer_text="55x8 55x6 55x6",
+        context=_context(),
+        catalog=(),
+    )
+
+    assert result == expected
+    prompt = create.await_args.kwargs["input"]
+    assert "panca piana" in prompt
+    assert "55x8 55x6 55x6" in prompt
+    assert "Non chiedere un altro chiarimento" in prompt
+    assert adapter.workout_log_followup_prompt_version == "workout-log-followup-v1"

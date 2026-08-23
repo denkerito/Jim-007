@@ -39,6 +39,15 @@
       "expected_kind": "needs_clarification"
     },
     {
+      "id": "workout-rewrite-required",
+      "operation": "workout_event",
+      "arguments": {"telegram_user_id": 12345, "update_id": 102, "action": "log", "text": "pesante"},
+      "request": {"path": "/internal/workout-events", "body": {"provider": "telegram", "provider_subject": "12345", "action": "log", "text": "pesante"}, "idempotency_key": "telegram:update:102"},
+      "status": 200,
+      "response": {"kind": "rewrite_required", "clarification_message": "Non riesco ancora a interpretarlo. Riscrivi l'intero esercizio."},
+      "expected_kind": "rewrite_required"
+    },
+    {
       "id": "program-reset",
       "operation": "program_event",
       "arguments": {"telegram_user_id": 12345, "update_id": 201, "action": "new"},

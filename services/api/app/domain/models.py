@@ -29,6 +29,14 @@ class WorkoutStatus(StrEnum):
     COMPLETED = "completed"
 
 
+class WorkoutLogClarificationStatus(StrEnum):
+    PENDING = "pending"
+    RESOLVED = "resolved"
+    REWRITE_REQUIRED = "rewrite_required"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
 class ProgramWorkoutItem(DomainModel):
     id: UUID
     position: int = Field(gt=0, le=32767)
@@ -287,3 +295,44 @@ class Workout(DomainModel):
                 "exercises": self.exercises,
             }
         )
+
+
+class WorkoutLogClarification(DomainModel):
+    id: UUID
+    user_id: UUID
+    workout_id: UUID
+    status: WorkoutLogClarificationStatus
+    original_text: str | None = None
+    clarification_message: str | None = None
+    model: str
+    initial_prompt_version: str
+    followup_prompt_version: str
+    created_at: datetime
+    expires_at: datetime
+    terminal_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def state_must_be_consistent(self) -> Self:
+        if self.expires_at <= self.created_at:
+            raise ValueError("clarification must expire after creation")
+        for value in (
+            self.model,
+            self.initial_prompt_version,
+            self.followup_prompt_version,
+        ):
+            if not clean_required_text(value):
+                raise ValueError("clarification metadata must not be blank")
+        if self.status is WorkoutLogClarificationStatus.PENDING:
+            if (
+                not clean_required_text(self.original_text or "")
+                or not clean_required_text(self.clarification_message or "")
+                or self.terminal_at is not None
+            ):
+                raise ValueError("pending clarification state is inconsistent")
+        elif (
+            self.original_text is not None
+            or self.clarification_message is not None
+            or self.terminal_at is None
+        ):
+            raise ValueError("terminal clarification state is inconsistent")
+        return self

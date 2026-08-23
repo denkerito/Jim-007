@@ -37,6 +37,7 @@ from app.domain.models import (
     Workout,
     WorkoutExercise,
     WorkoutStatus,
+    WorkoutLogClarificationStatus,
 )
 from app.domain.normalization import clean_required_text, normalize_exercise_name
 
@@ -141,6 +142,11 @@ class AddExerciseToWorkout:
                 preferred_load_unit=user.preferred_load_unit,
             )
             workout.with_exercise(occurrence)
+            await uow.workout_log_clarifications.cancel_pending_for_workout(
+                command.user_id,
+                workout.id,
+                terminal_at=datetime.now(timezone.utc),
+            )
             await uow.commit()
             return CommandResult(occurrence, replayed=False)
 
@@ -237,6 +243,20 @@ class LogWorkoutMessage:
             if workout.status is not WorkoutStatus.DRAFT:
                 raise WorkoutNotEditableError("A completed workout cannot be changed")
 
+            clarification = None
+            if command.clarification_id is not None:
+                clarification = await uow.workout_log_clarifications.get_for_update(
+                    command.clarification_id, command.user_id
+                )
+                if (
+                    clarification is None
+                    or clarification.workout_id != workout.id
+                    or clarification.status is not WorkoutLogClarificationStatus.PENDING
+                ):
+                    raise IdempotencyConflictError(
+                        "The workout clarification is no longer pending"
+                    )
+
             added: list[WorkoutExercise] = []
             log_batch_id = uuid4()
             for interpreted in command.exercises:
@@ -261,6 +281,14 @@ class LogWorkoutMessage:
                 )
                 workout = workout.with_exercise(occurrence)
                 added.append(occurrence)
+
+            if clarification is not None:
+                await uow.workout_log_clarifications.finish(
+                    clarification.id,
+                    command.user_id,
+                    status=WorkoutLogClarificationStatus.RESOLVED.value,
+                    terminal_at=datetime.now(timezone.utc),
+                )
 
             await uow.commit()
             return LogWorkoutMessageResult(
@@ -344,6 +372,11 @@ class UndoWorkoutMessage:
             )
             if not removed:
                 raise NothingToUndoError("The active workout has nothing to undo")
+            await uow.workout_log_clarifications.cancel_pending_for_workout(
+                command.user_id,
+                workout.id,
+                terminal_at=datetime.now(timezone.utc),
+            )
             updated = await uow.workouts.get_by_id(workout.id, command.user_id)
             if updated is None:
                 raise RuntimeError("Updated workout could not be loaded")
@@ -386,5 +419,10 @@ class CompleteWorkout:
             else:
                 workout.as_completed(datetime.now(timezone.utc))
                 completed = await uow.workouts.complete(workout.id, command.user_id)
+            await uow.workout_log_clarifications.cancel_pending_for_workout(
+                command.user_id,
+                workout.id,
+                terminal_at=datetime.now(timezone.utc),
+            )
             await uow.commit()
             return CommandResult(completed, replayed=False)

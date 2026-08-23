@@ -1,5 +1,7 @@
 """Internal endpoint for provider-neutral chat workout events."""
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends
 
 from app.api.auth import require_internal_token
@@ -13,6 +15,7 @@ from app.api.schemas import (
 )
 from app.application.commands import ProcessWorkoutEventCommand
 from app.application.workout_events import ProcessWorkoutEvent
+from app.config import Settings, get_settings
 
 
 router = APIRouter(
@@ -38,8 +41,13 @@ async def process_workout_event(
     idempotency_key: IdempotencyKey,
     uow_factory: UowFactory,
     interpreter: WorkoutInterpreter,
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> WorkoutEventResponse:
-    result = await ProcessWorkoutEvent(uow_factory, interpreter).execute(
+    result = await ProcessWorkoutEvent(
+        uow_factory,
+        interpreter,
+        clarification_ttl_seconds=settings.llm_clarification_ttl_seconds,
+    ).execute(
         ProcessWorkoutEventCommand(
             provider=request.provider,
             provider_subject=request.provider_subject,

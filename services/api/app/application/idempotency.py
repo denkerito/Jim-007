@@ -21,6 +21,8 @@ class CommandOperation(StrEnum):
     RESET_PROGRAM = "reset_program"
     CREATE_PROGRAM_WORKOUT = "create_program_workout"
     EDIT_PROGRAM_WORKOUT = "edit_program_workout"
+    REQUEST_WORKOUT_LOG_CLARIFICATION = "request_workout_log_clarification"
+    REQUIRE_WORKOUT_LOG_REWRITE = "require_workout_log_rewrite"
 
 
 ResourceT = TypeVar("ResourceT", Workout, WorkoutExercise)

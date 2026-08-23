@@ -95,6 +95,14 @@ I modelli ORM non attraversano il confine dell'infrastruttura. Ogni caso d'uso a
 
 La registrazione di un allenamento e incrementale: viene creato un workout `draft`, ogni messaggio aggiunge atomicamente un `WorkoutExercise` con tutti i suoi set e un comando esplicito porta infine il workout a `completed`. Non vengono mantenute transazioni database aperte tra messaggi o durante chiamate a servizi esterni.
 
+Un log ambiguo puo aprire un solo `WorkoutLogClarification` persistente per il draft.
+Il messaggio testuale successivo, entro 15 minuti, viene interpretato insieme al
+testo originale e alla domanda precedente. Il secondo output e terminale: salva un
+payload completo oppure restituisce `rewrite_required`, elimina i testi intermedi e
+chiede di riscrivere l'esercizio. Il bot non conserva stato locale. Anche questa
+chiamata LLM avviene senza una transazione aperta; salvataggio del log e risoluzione
+del chiarimento condividono invece un unico commit.
+
 Workout history ed exercise history sono proiezioni delle tabelle normalizzate e
 includono solo workout `completed`. Usano paginazione keyset con un cursore opaco
 basato su `(performed_on, created_at, id)` in ordine decrescente. L'exercise history

@@ -229,6 +229,7 @@ class WorkoutEventResponse(ApiModel):
         "cancelled",
         "undone",
         "needs_clarification",
+        "rewrite_required",
     ]
     replayed: bool = False
     workout: WorkoutResponse | None = None
