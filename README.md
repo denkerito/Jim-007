@@ -6,7 +6,7 @@ JIM007 keeps structured workout data behind a platform-independent web account. 
 
 The LLM is only an interpreter: it never accesses the database, and every generated payload is checked by the application before it is persisted.
 
-> **Project status:** web-first authentication and secure Telegram linking are implemented. The progress/history dashboard remains a later iteration.
+> **Project status:** web-first authentication, secure Telegram linking, and the read-only workout history dashboard are implemented. Workout editing and progress statistics remain later iterations.
 
 ## Features
 
@@ -16,6 +16,7 @@ The LLM is only an interpreter: it never accesses the database, and every genera
 - Keep workouts as drafts until they are explicitly completed
 - Inspect, undo the last entry, or cancel an active workout
 - Browse workout and per-exercise history
+- Browse recent activity, workout history, and a searchable exercise directory on the web
 - Create reusable training-day programs with prescribed sets, reps, and rest
 - Resolve dates, exercise names, and program aliases conversationally
 - Prevent duplicate writes with idempotent commands
@@ -244,7 +245,8 @@ python scripts/internal_api_contract.py --write
 
 ## Roadmap
 
-- Web dashboard for workout history, progression, and statistics
+- Web workout creation and editing
+- Progression charts and training statistics
 - Richer exercise metrics such as duration, distance, RPE, and RIR
 - Conversational correction and audit history
 - Exercise aliases and a canonical exercise catalog

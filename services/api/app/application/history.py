@@ -29,7 +29,7 @@ from app.domain.exceptions import (
     LlmInvalidResponseError,
     NotFoundError,
 )
-from app.domain.models import Workout
+from app.domain.models import Exercise, Workout
 from app.domain.normalization import clean_required_text, normalize_exercise_name
 
 
@@ -96,6 +96,17 @@ class ListWorkoutHistory:
         items = values[:limit]
         next_cursor = _workout_cursor(items[-1]) if len(values) > limit else None
         return WorkoutHistoryPage(items=items, next_cursor=next_cursor)
+
+
+class ListExerciseCatalog:
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    async def execute(self, *, user_id: UUID) -> tuple[Exercise, ...]:
+        async with self._uow_factory() as uow:
+            if await uow.users.get_by_id(user_id) is None:
+                raise NotFoundError("User not found")
+            return await uow.exercises.list_for_user(user_id)
 
 
 class ListExerciseHistory:

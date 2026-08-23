@@ -2,6 +2,7 @@ import {FormEvent, ReactNode, useEffect, useState} from "react";
 import {Link, Navigate, Route, Routes, useNavigate} from "react-router-dom";
 import {useMutation, useQuery, useQueryClient} from "@tanstack/react-query";
 import {api, ApiError, Connection, LinkRequest, Session, setCsrf} from "./api";
+import {AppShell, DashboardPage, ExerciseHistoryPage, ExercisesPage, WorkoutsPage} from "./History";
 
 function Shell({children}: {children: ReactNode}) {return <main className="min-h-screen"><header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-7"><Link to="/" className="font-black tracking-tight text-xl">JIM<span className="rounded bg-lime px-1">007</span></Link><span className="text-sm text-moss">Train. Track. Improve.</span></header>{children}</main>}
 function Message({error}: {error: unknown}) {if (!error) return null; return <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{error instanceof ApiError ? error.message : "Something went wrong. Please try again."}</p>}
@@ -26,17 +27,25 @@ function Account() {
   const cancel=useMutation({mutationFn:()=>api<void>(`/api/me/telegram-link-requests/${request!.id}`,{method:"DELETE",body:"{}"}),onSuccess:()=>setRequest(null)});
   const unlink=useMutation({mutationFn:()=>api<void>("/api/me/telegram-connection/unlink",{method:"POST",body:JSON.stringify({password})}),onSuccess:async()=>{setPassword("");await connection.refetch()}});
   const logout=useMutation({mutationFn:()=>api<void>("/api/auth/logout",{method:"POST",body:"{}"}),onSuccess:async()=>{setCsrf(null);queryClient.clear();navigate("/login")}});
-  if(session.isLoading)return <Shell><p className="p-10">Loading…</p></Shell>;
+  if(session.isLoading)return <p className="p-10">Loading…</p>;
   if(session.error instanceof ApiError&&session.error.status===401)return <Navigate to="/login" replace/>;
   const candidate=request?.candidate;
-  return <Shell><section className="mx-auto max-w-5xl px-6 pb-16 pt-8">
+  return <section className="mx-auto max-w-5xl px-6 pb-16 pt-10">
     <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="eyebrow">Your space</p><h1 className="mt-2 text-5xl font-extrabold">Your account</h1><p className="mt-2 text-moss">Manage your profile and connected services.</p></div><button className="button-secondary" onClick={()=>logout.mutate()}>Sign out</button></div>
     <div className="mt-10 grid gap-6 md:grid-cols-[1fr_1.4fr]">
       <article className="card"><p className="eyebrow">Account</p><h2 className="mt-3 text-2xl font-bold">Profile</h2><p className="mt-2 break-all text-moss">{session.data?.email}</p><span className="mt-6 inline-flex rounded-full bg-lime/40 px-3 py-1 text-sm font-bold">Email verified</span></article>
       <article className="card"><p className="eyebrow">Integrations</p><h2 className="mt-3 text-2xl font-bold">Telegram</h2>
       {connection.data?.linked?<><p className="mt-2 text-moss">Connected as {connection.data.display_name||"Telegram user"}{connection.data.username&&` · @${connection.data.username}`}</p><p className="mt-4 text-sm text-moss">Log and review workouts directly from Telegram.</p><div className="mt-6 space-y-3"><Password value={password} onChange={setPassword}/><Message error={unlink.error}/><button className="button-secondary w-full" disabled={password.length<12||unlink.isPending} onClick={()=>unlink.mutate()}>Disconnect Telegram</button></div></>:<><p className="mt-2 text-moss">Connect Telegram to log workouts from chat.</p>{!request&&<button className="button-secondary mt-6 w-full" disabled={create.isPending} onClick={()=>create.mutate()}>Connect Telegram</button>}<Message error={create.error||confirm.error||cancel.error}/>{request&&<div className="mt-6 rounded-2xl bg-cream p-4"><p className="text-sm font-bold">{request.status==="pending_telegram"?"Waiting for you to open Telegram…":request.status==="pending_web_confirmation"?"Confirm the Telegram profile below":"This request is no longer valid"}</p>{candidate&&<p className="mt-2">{candidate.display_name??"Telegram profile"}{candidate.username&&` · @${candidate.username}`}</p>}<div className="mt-4 flex gap-2">{request.status==="pending_telegram"&&request.deep_link&&<a className="button flex-1" href={request.deep_link} target="_blank" rel="noreferrer">Open Telegram</a>}{request.status==="pending_web_confirmation"&&<button className="button flex-1" onClick={()=>confirm.mutate()}>Confirm</button>}<button className="button-secondary" onClick={()=>cancel.mutate()}>Cancel</button></div></div>}</>}</article>
     </div>
-  </section></Shell>;
+  </section>;
 }
 
-export function App(){return <Routes><Route path="/" element={<Navigate to="/account" replace/>}/><Route path="/register" element={<Register/>}/><Route path="/login" element={<Login/>}/><Route path="/verify-email" element={<TokenPage purpose="verify"/>}/><Route path="/forgot-password" element={<EmailAction kind="forgot"/>}/><Route path="/reset-password" element={<TokenPage purpose="reset"/>}/><Route path="/account" element={<Account/>}/><Route path="*" element={<Navigate to="/account" replace/>}/></Routes>}
+function ProtectedApp() {
+  const session=useQuery({queryKey:["session"],queryFn:async()=>{const value=await api<Session>("/api/auth/session");setCsrf(value.csrf_token);return value},retry:false});
+  if(session.isLoading)return <Shell><p className="p-10">Loading…</p></Shell>;
+  if(session.error instanceof ApiError&&session.error.status===401)return <Navigate to="/login" replace/>;
+  if(session.error)return <Shell><Message error={session.error}/></Shell>;
+  return <AppShell><Routes><Route path="/" element={<DashboardPage/>}/><Route path="/workouts" element={<WorkoutsPage/>}/><Route path="/exercises" element={<ExercisesPage/>}/><Route path="/exercises/:exerciseId" element={<ExerciseHistoryPage/>}/><Route path="/account" element={<Account/>}/><Route path="*" element={<Navigate to="/" replace/>}/></Routes></AppShell>;
+}
+
+export function App(){return <Routes><Route path="/register" element={<Register/>}/><Route path="/login" element={<Login/>}/><Route path="/verify-email" element={<TokenPage purpose="verify"/>}/><Route path="/forgot-password" element={<EmailAction kind="forgot"/>}/><Route path="/reset-password" element={<TokenPage purpose="reset"/>}/><Route path="/*" element={<ProtectedApp/>}/></Routes>}

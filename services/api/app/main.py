@@ -14,6 +14,7 @@ from app.api.workouts import router as workouts_router
 from app.api.program_events import router as program_events_router
 from app.api.web_auth import router as web_auth_router
 from app.api.telegram_links import router as telegram_links_router, internal_router as telegram_links_internal_router
+from app.api.web_history import router as web_history_router
 from app.config import get_settings
 from app.infrastructure.database.session import engine
 from app.infrastructure.llm import GeminiWorkoutTextInterpreter
@@ -47,9 +48,9 @@ app = FastAPI(title="JIM007 API", version="0.1.0", lifespan=lifespan)
 
 
 @app.middleware("http")
-async def auth_responses_are_not_cached(request: Request, call_next):
+async def private_web_responses_are_not_cached(request: Request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith("/api/auth/"):
+    if request.url.path.startswith(("/api/auth/", "/api/me/")):
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -64,6 +65,7 @@ app.include_router(program_events_router)
 app.include_router(web_auth_router)
 app.include_router(telegram_links_router)
 app.include_router(telegram_links_internal_router)
+app.include_router(web_history_router)
 
 
 @app.get("/health/live", tags=["system"])

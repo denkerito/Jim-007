@@ -21,6 +21,14 @@ Telegram -> Bot --------+
 
 L'account web e l'identita applicativa sono il punto di ingresso principale e non dipendono da Telegram. Telegram e un'integrazione opzionale rappresentata come identita esterna; altri client potranno essere aggiunti senza cambiare la proprieta dei dati o il dominio. Il bot non accede direttamente al database e non contiene logica di dominio. Comunica con FastAPI attraverso un contratto HTTP e un token interno. Il browser raggiunge solo `/api/*` tramite Nginx; `/internal/*` non viene inoltrato.
 
+Le letture web dello storico usano endpoint session-based sotto `/api/me`: il
+browser non invia mai un `user_id`, che viene invece derivato dalla sessione
+server-side. I casi d'uso e le proiezioni sono gli stessi degli endpoint interni,
+ma autenticazione e trasporto restano separati. La dashboard legge gli ultimi
+workout completati; lo storico workout e lo storico esercizio mantengono la
+paginazione keyset, mentre il catalogo personale degli esercizi viene restituito
+in ordine alfabetico per la ricerca locale nel browser.
+
 I messaggi workout usano `POST /internal/workout-events`. Il bot traduce
 `/workout`, testo libero, `/end`, `/cancel` e `/undo` nelle azioni `open`, `log`,
 `complete`, `cancel` e `undo`, allegando una idempotency key derivata dal Telegram

@@ -171,6 +171,10 @@ class ExerciseResponse(ApiModel):
     normalized_name: str
 
 
+class ExerciseListResponse(ApiModel):
+    items: tuple[ExerciseResponse, ...]
+
+
 class WorkoutExerciseResponse(ApiModel):
     id: UUID
     exercise: ExerciseResponse
