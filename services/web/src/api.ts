@@ -74,6 +74,7 @@ export const historyApi = {
   workouts: (limit: number, cursor?: string) => api<WorkoutPage>(withCursor("/api/me/workouts", limit, cursor)),
   exercises: () => api<ExerciseCatalog>("/api/me/exercises"),
   createExercise: (name: string) => api<CreateExerciseResult>("/api/me/exercises", {method: "POST", body: JSON.stringify({name})}),
+  renameExercise: (exerciseId: string, name: string) => api<Exercise>(`/api/me/exercises/${exerciseId}`, {method: "PATCH", body: JSON.stringify({name})}),
   exerciseHistory: (exerciseId: string, limit: number, cursor?: string) => api<ExerciseHistoryPage>(withCursor(`/api/me/exercises/${exerciseId}/history`, limit, cursor)),
   overviewStatistics: (period: StatisticsPeriod) => api<OverviewStatistics>(withPeriod("/api/me/statistics/overview", period)),
   exerciseStatistics: (exerciseId: string, period: StatisticsPeriod) => api<ExerciseStatistics>(withPeriod(`/api/me/exercises/${exerciseId}/statistics`, period)),

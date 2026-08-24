@@ -5,13 +5,14 @@ from uuid import UUID
 
 from sqlalchemy import delete, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.application.commands import ExerciseHistoryItem, HistoryCursor
 from app.application.ports import ProcessedCommand as CommandRecord
 from app.application.statistics import StatisticsSetRecord
-from app.domain.exceptions import ActiveWorkoutExistsError
+from app.domain.exceptions import ActiveWorkoutExistsError, ExerciseNameConflictError
 from app.domain.models import (
     Exercise,
     ExternalIdentity,
@@ -479,6 +480,27 @@ class SqlAlchemyExerciseRepository:
             raise RuntimeError("Exercise upsert did not return a row")
         await self._session.refresh(model)
         return to_exercise(model), inserted_id is not None
+
+    async def rename(
+        self, *, exercise_id: UUID, user_id: UUID, name: str, normalized_name: str
+    ) -> Exercise | None:
+        statement = (
+            update(orm.Exercise)
+            .where(
+                orm.Exercise.id == exercise_id,
+                orm.Exercise.user_id == user_id,
+            )
+            .values(name=name, normalized_name=normalized_name)
+            .returning(orm.Exercise)
+        )
+        try:
+            model = await self._session.scalar(statement)
+            await self._session.flush()
+        except IntegrityError as error:
+            raise ExerciseNameConflictError(
+                "An exercise with this name already exists"
+            ) from error
+        return to_exercise(model) if model is not None else None
 
 
 class SqlAlchemyWorkoutRepository:

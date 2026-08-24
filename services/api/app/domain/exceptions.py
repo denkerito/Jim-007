@@ -85,6 +85,10 @@ class InvalidExerciseNameError(DomainError):
     """An exercise name is blank or exceeds the supported length."""
 
 
+class ExerciseNameConflictError(ConflictError):
+    """Another personal exercise already uses the requested normalized name."""
+
+
 class InvalidHistoryCursorError(DomainError):
     """A history cursor cannot be decoded or validated."""
 

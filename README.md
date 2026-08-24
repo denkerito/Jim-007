@@ -34,7 +34,7 @@ The LLM is deliberately kept outside the database boundary: it interprets text i
 - Reusable training programs with aliases
 - Web registration, email verification, and secure Telegram account linking
 - Searchable exercise directory and recent activity dashboard
-- Manual creation of personal exercises from the web directory
+- Manual creation and renaming of personal exercises from the web directory
 
 ## Architecture
 

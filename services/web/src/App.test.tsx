@@ -115,6 +115,61 @@ describe("authentication and optional integrations", () => {
     await waitFor(() => expect(requestedPeriod).toBe("12w"));
   });
 
+  it("renames an exercise from its detail page and updates the title", async () => {
+    let releaseRequest!: () => void;
+    const requestPending = new Promise<void>(resolve => {releaseRequest = resolve});
+    let currentExercise = exerciseStatistics.exercise;
+    server.use(
+      http.get("/api/auth/session", () => HttpResponse.json(session)),
+      http.get("/api/me/exercises/e1/history", () => HttpResponse.json({exercise: currentExercise, items: [], next_cursor: null})),
+      http.get("/api/me/exercises/e1/statistics", () => HttpResponse.json({...exerciseStatistics, exercise: currentExercise})),
+      http.get("/api/me/exercises", () => HttpResponse.json({items: [currentExercise]})),
+      http.patch("/api/me/exercises/e1", async ({request}) => {
+        expect(request.headers.get("X-CSRF-Token")).toBe("csrf-test");
+        expect(await request.json()).toEqual({name: "Barbell Bench Press"});
+        await requestPending;
+        currentExercise = {id: "e1", name: "Barbell Bench Press", normalized_name: "barbell bench press"};
+        return HttpResponse.json(currentExercise);
+      }),
+    );
+    renderAt("/exercises/e1");
+    await userEvent.click(await screen.findByRole("button", {name: "Rename exercise"}));
+    const input = screen.getByRole("textbox", {name: "Exercise name"});
+    expect(input).toHaveValue("Bench Press");
+    await userEvent.click(screen.getByRole("button", {name: "Cancel"}));
+    expect(screen.queryByRole("textbox", {name: "Exercise name"})).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", {name: "Rename exercise"}));
+    const reopenedInput = screen.getByRole("textbox", {name: "Exercise name"});
+    await userEvent.clear(reopenedInput);
+    await userEvent.type(reopenedInput, "Barbell Bench Press");
+    await userEvent.click(screen.getByRole("button", {name: "Save name"}));
+    expect(screen.getByRole("button", {name: "Saving…"})).toBeDisabled();
+    releaseRequest();
+
+    expect(await screen.findByRole("heading", {name: "Barbell Bench Press"})).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Exercise renamed successfully.");
+    expect(screen.queryByRole("textbox", {name: "Exercise name"})).not.toBeInTheDocument();
+  });
+
+  it("keeps the rename form actionable when the new name conflicts", async () => {
+    server.use(
+      http.get("/api/auth/session", () => HttpResponse.json(session)),
+      http.get("/api/me/exercises/e1/history", () => HttpResponse.json({exercise: exerciseStatistics.exercise, items: [], next_cursor: null})),
+      http.get("/api/me/exercises/e1/statistics", () => HttpResponse.json(exerciseStatistics)),
+      http.patch("/api/me/exercises/e1", () => HttpResponse.json({detail: {code: "exercise_name_conflict", message: "An exercise with this name already exists"}}, {status: 409})),
+    );
+    renderAt("/exercises/e1");
+    await userEvent.click(await screen.findByRole("button", {name: "Rename exercise"}));
+    const input = screen.getByRole("textbox", {name: "Exercise name"});
+    await userEvent.clear(input);
+    await userEvent.type(input, "Squat");
+    await userEvent.click(screen.getByRole("button", {name: "Save name"}));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("An exercise with this name already exists");
+    expect(screen.getByRole("textbox", {name: "Exercise name"})).toHaveValue("Squat");
+  });
+
   it("uses repetition progress for an exercise without loaded sets", async () => {
     const bodyweight = {
       ...exerciseStatistics,

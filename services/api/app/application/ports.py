@@ -167,6 +167,10 @@ class ExerciseRepository(Protocol):
         self, *, exercise_id: UUID, user_id: UUID, name: str, normalized_name: str
     ) -> tuple[Exercise, bool]: ...
 
+    async def rename(
+        self, *, exercise_id: UUID, user_id: UUID, name: str, normalized_name: str
+    ) -> Exercise | None: ...
+
 
 class WorkoutRepository(Protocol):
     async def create(

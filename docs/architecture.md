@@ -28,10 +28,12 @@ ma autenticazione e trasporto restano separati. La dashboard legge gli ultimi
 workout completati; lo storico workout e lo storico esercizio mantengono la
 paginazione keyset, mentre il catalogo personale degli esercizi viene restituito
 in ordine alfabetico per la ricerca locale nel browser.
-La web app puo inoltre aggiungere un esercizio con `POST /api/me/exercises`.
-L'endpoint delega a un caso d'uso applicativo indipendente dal trasporto che
-normalizza il nome ed esegue atomicamente create-or-get; futuri client possono
-riutilizzare lo stesso comportamento con un adapter di autenticazione diverso.
+La web app puo inoltre aggiungere un esercizio con `POST /api/me/exercises` e
+rinominarlo con `PATCH /api/me/exercises/{exercise_id}`. Gli endpoint delegano a
+casi d'uso applicativi indipendenti dal trasporto che normalizzano il nome ed
+eseguono atomicamente create-or-get o update. La rinomina conserva l'ID e quindi
+si riflette su storico e statistiche, ma non modifica il testo delle versioni
+immutabili dei workout programmati.
 
 Le statistiche web usano `GET /api/me/statistics/overview` e
 `GET /api/me/exercises/{exercise_id}/statistics`. Sono proiezioni read-only dei

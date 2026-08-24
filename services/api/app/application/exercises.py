@@ -64,3 +64,24 @@ class CreateExercise:
             )
             await uow.commit()
             return result
+
+
+class RenameExercise:
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    async def execute(
+        self, *, user_id: UUID, exercise_id: UUID, name: str
+    ) -> Exercise:
+        cleaned = clean_exercise_name(name)
+        async with self._uow_factory() as uow:
+            exercise = await uow.exercises.rename(
+                exercise_id=exercise_id,
+                user_id=user_id,
+                name=cleaned,
+                normalized_name=normalize_exercise_name(cleaned),
+            )
+            if exercise is None:
+                raise NotFoundError("Exercise not found")
+            await uow.commit()
+            return exercise

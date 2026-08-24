@@ -44,7 +44,7 @@ Il database contiene dati applicativi strutturati. Il bot Telegram e il provider
 - modifica e revisione di un workout gia salvato;
 - versionamento dei workout;
 - annullamento logico dei workout;
-- archiviazione, rinomina e unione degli esercizi;
+- archiviazione e unione degli esercizi;
 - alias persistenti dei nomi degli esercizi;
 - catalogo globale/canonico degli esercizi;
 - set basati su durata, distanza, calorie, RPE o RIR;

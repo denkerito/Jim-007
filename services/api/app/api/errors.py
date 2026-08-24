@@ -9,6 +9,7 @@ from app.domain.exceptions import (
     ActiveWorkoutExistsError,
     ConflictError,
     DomainError,
+    ExerciseNameConflictError,
     TelegramNotLinkedError,
     InvalidHistoryCursorError,
     LlmInvalidResponseError,
@@ -84,6 +85,20 @@ def install_error_handlers(app: FastAPI) -> None:
                     "code": "active_workout_exists",
                     "message": str(error),
                     "workout_id": str(error.workout_id),
+                }
+            },
+        )
+
+    @app.exception_handler(ExerciseNameConflictError)
+    async def exercise_name_conflict(
+        _: Request, error: ExerciseNameConflictError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "detail": {
+                    "code": "exercise_name_conflict",
+                    "message": str(error),
                 }
             },
         )

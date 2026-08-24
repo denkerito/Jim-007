@@ -171,7 +171,7 @@ class ExerciseResponse(ApiModel):
     normalized_name: str
 
 
-class CreateExerciseRequest(ApiModel):
+class ExerciseNameRequest(ApiModel):
     name: str = Field(min_length=1, max_length=4096)
 
     @field_validator("name")
@@ -180,6 +180,14 @@ class CreateExerciseRequest(ApiModel):
         if not value.strip():
             raise ValueError("exercise name must not be blank")
         return value
+
+
+class CreateExerciseRequest(ExerciseNameRequest):
+    pass
+
+
+class RenameExerciseRequest(ExerciseNameRequest):
+    pass
 
 
 class CreateExerciseResponse(ApiModel):

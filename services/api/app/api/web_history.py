@@ -12,12 +12,13 @@ from app.api.schemas import (
     ExerciseHistoryPageResponse,
     ExerciseListResponse,
     ExerciseResponse,
+    RenameExerciseRequest,
     WorkoutHistoryPageResponse,
     exercise_history_page_response,
     workout_history_page_response,
 )
 from app.api.web_security import WebAuth, WebAuthCsrf, require_safe_public_mutation
-from app.application.exercises import CreateExercise
+from app.application.exercises import CreateExercise, RenameExercise
 from app.application.history import (
     ListExerciseCatalog,
     ListExerciseHistory,
@@ -89,6 +90,35 @@ async def create_my_exercise(
             normalized_name=exercise.normalized_name,
         ),
         created=result.created,
+    )
+
+
+@router.patch(
+    "/exercises/{exercise_id}",
+    response_model=ExerciseResponse,
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "Exercise not found."},
+        status.HTTP_409_CONFLICT: {
+            "description": "Another exercise already uses the normalized name."
+        },
+    },
+    dependencies=[Depends(require_safe_public_mutation)],
+)
+async def rename_my_exercise(
+    exercise_id: UUID,
+    request: RenameExerciseRequest,
+    context: WebAuthCsrf,
+    uow_factory: UowFactory,
+) -> ExerciseResponse:
+    exercise = await RenameExercise(uow_factory).execute(
+        user_id=context.user_id,
+        exercise_id=exercise_id,
+        name=request.name,
+    )
+    return ExerciseResponse(
+        id=exercise.id,
+        name=exercise.name,
+        normalized_name=exercise.normalized_name,
     )
 
 

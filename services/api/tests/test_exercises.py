@@ -4,8 +4,12 @@ from uuid import uuid4
 
 import pytest
 
-from app.application.exercises import CreateExercise
-from app.domain.exceptions import InvalidExerciseNameError, NotFoundError
+from app.application.exercises import CreateExercise, RenameExercise
+from app.domain.exceptions import (
+    ExerciseNameConflictError,
+    InvalidExerciseNameError,
+    NotFoundError,
+)
 from app.domain.models import Exercise
 
 
@@ -95,4 +99,89 @@ async def test_create_exercise_requires_an_existing_user() -> None:
         await CreateExercise(lambda: uow).execute(user_id=uuid4(), name="Squat")
 
     uow.exercises.get_or_create.assert_not_awaited()
+    uow.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rename_exercise_cleans_and_normalizes_the_name() -> None:
+    user_id = uuid4()
+    exercise_id = uuid4()
+    uow = FakeUnitOfWork()
+    renamed = exercise(user_id=user_id, name="Bench Press")
+    uow.exercises.rename.return_value = renamed
+
+    result = await RenameExercise(lambda: uow).execute(
+        user_id=user_id,
+        exercise_id=exercise_id,
+        name="  Bench\t Press  ",
+    )
+
+    assert result == renamed
+    uow.exercises.rename.assert_awaited_once_with(
+        exercise_id=exercise_id,
+        user_id=user_id,
+        name="Bench Press",
+        normalized_name="bench press",
+    )
+    uow.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_rename_exercise_allows_display_name_only_changes() -> None:
+    user_id = uuid4()
+    exercise_id = uuid4()
+    uow = FakeUnitOfWork()
+    renamed = exercise(user_id=user_id, name="BENCH PRESS")
+    uow.exercises.rename.return_value = renamed
+
+    result = await RenameExercise(lambda: uow).execute(
+        user_id=user_id,
+        exercise_id=exercise_id,
+        name="BENCH PRESS",
+    )
+
+    assert result.name == "BENCH PRESS"
+    assert uow.exercises.rename.await_args.kwargs["normalized_name"] == "bench press"
+    uow.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", [" \t ", "x" * 256])
+async def test_rename_exercise_rejects_invalid_names(name: str) -> None:
+    uow = FakeUnitOfWork()
+
+    with pytest.raises(InvalidExerciseNameError):
+        await RenameExercise(lambda: uow).execute(
+            user_id=uuid4(), exercise_id=uuid4(), name=name
+        )
+
+    uow.exercises.rename.assert_not_awaited()
+    uow.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rename_exercise_requires_an_owned_exercise() -> None:
+    uow = FakeUnitOfWork()
+    uow.exercises.rename.return_value = None
+
+    with pytest.raises(NotFoundError):
+        await RenameExercise(lambda: uow).execute(
+            user_id=uuid4(), exercise_id=uuid4(), name="Squat"
+        )
+
+    uow.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rename_exercise_propagates_name_conflicts() -> None:
+    uow = FakeUnitOfWork()
+    uow.exercises.rename.side_effect = ExerciseNameConflictError(
+        "An exercise with this name already exists"
+    )
+
+    with pytest.raises(ExerciseNameConflictError):
+        await RenameExercise(lambda: uow).execute(
+            user_id=uuid4(), exercise_id=uuid4(), name="Squat"
+        )
+
     uow.commit.assert_not_awaited()
