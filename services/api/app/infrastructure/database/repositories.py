@@ -452,7 +452,7 @@ class SqlAlchemyExerciseRepository:
 
     async def get_or_create(
         self, *, exercise_id: UUID, user_id: UUID, name: str, normalized_name: str
-    ) -> Exercise:
+    ) -> tuple[Exercise, bool]:
         statement = (
             insert(orm.Exercise)
             .values(
@@ -478,7 +478,7 @@ class SqlAlchemyExerciseRepository:
         if model is None:
             raise RuntimeError("Exercise upsert did not return a row")
         await self._session.refresh(model)
-        return to_exercise(model)
+        return to_exercise(model), inserted_id is not None
 
 
 class SqlAlchemyWorkoutRepository:

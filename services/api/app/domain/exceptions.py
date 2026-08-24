@@ -81,6 +81,10 @@ class InvalidWorkoutDateError(DomainError):
     """The requested workout date violates tracking rules."""
 
 
+class InvalidExerciseNameError(DomainError):
+    """An exercise name is blank or exceeds the supported length."""
+
+
 class InvalidHistoryCursorError(DomainError):
     """A history cursor cannot be decoded or validated."""
 

@@ -158,6 +158,63 @@ describe("authentication and optional integrations", () => {
     expect(screen.queryByRole("link", {name: /Bench Press/})).not.toBeInTheDocument();
   });
 
+  it("creates an exercise with CSRF protection and updates the directory", async () => {
+    let releaseRequest!: () => void;
+    const requestPending = new Promise<void>(resolve => {releaseRequest = resolve});
+    server.use(
+      http.get("/api/auth/session", () => HttpResponse.json(session)),
+      http.get("/api/me/exercises", () => HttpResponse.json({items: []})),
+      http.post("/api/me/exercises", async ({request}) => {
+        expect(request.headers.get("X-CSRF-Token")).toBe("csrf-test");
+        expect(await request.json()).toEqual({name: "Lat Pulldown"});
+        await requestPending;
+        return HttpResponse.json({exercise: {id: "e2", name: "Lat Pulldown", normalized_name: "lat pulldown"}, created: true}, {status: 201});
+      }),
+    );
+    renderAt("/exercises");
+    await userEvent.click(await screen.findByRole("button", {name: "Add exercise"}));
+    await userEvent.type(screen.getByRole("textbox", {name: "Exercise name"}), "Lat Pulldown");
+    await userEvent.click(screen.getByRole("button", {name: "Save exercise"}));
+    expect(screen.getByRole("button", {name: "Saving…"})).toBeDisabled();
+    releaseRequest();
+    expect(await screen.findByRole("link", {name: /Lat Pulldown/})).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Exercise added to your library.");
+    expect(screen.queryByRole("textbox", {name: "Exercise name"})).not.toBeInTheDocument();
+  });
+
+  it("reports an existing exercise without adding a duplicate", async () => {
+    const existing = {id: "e1", name: "Bench Press", normalized_name: "bench press"};
+    server.use(
+      http.get("/api/auth/session", () => HttpResponse.json(session)),
+      http.get("/api/me/exercises", () => HttpResponse.json({items: [existing]})),
+      http.post("/api/me/exercises", () => HttpResponse.json({exercise: existing, created: false})),
+    );
+    renderAt("/exercises");
+    await userEvent.click(await screen.findByRole("button", {name: "Add exercise"}));
+    await userEvent.type(screen.getByRole("textbox", {name: "Exercise name"}), "bench press");
+    await userEvent.click(screen.getByRole("button", {name: "Save exercise"}));
+    expect(await screen.findByRole("status")).toHaveTextContent("already in your library");
+    expect(screen.getAllByRole("link", {name: /Bench Press/})).toHaveLength(1);
+  });
+
+  it("can cancel the form and keeps API errors actionable", async () => {
+    server.use(
+      http.get("/api/auth/session", () => HttpResponse.json(session)),
+      http.get("/api/me/exercises", () => HttpResponse.json({items: []})),
+      http.post("/api/me/exercises", () => HttpResponse.json({detail: {code: "invalid_exercise", message: "Exercise could not be added"}}, {status: 422})),
+    );
+    renderAt("/exercises");
+    await userEvent.click(await screen.findByRole("button", {name: "Add exercise"}));
+    await userEvent.click(screen.getByRole("button", {name: "Cancel"}));
+    expect(screen.queryByRole("textbox", {name: "Exercise name"})).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", {name: "Add exercise"}));
+    await userEvent.type(screen.getByRole("textbox", {name: "Exercise name"}), "Squat");
+    await userEvent.click(screen.getByRole("button", {name: "Save exercise"}));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Exercise could not be added");
+    expect(screen.getByRole("textbox", {name: "Exercise name"})).toHaveValue("Squat");
+  });
+
   it("loads the next workout page from the opaque cursor", async () => {
     const second = {...workout, id: "w2", performed_on: "2026-08-19", notes: "Second workout"};
     server.use(

@@ -4,6 +4,7 @@ export type LinkRequest = {id: string; status: "pending_telegram" | "pending_web
 export type Load = {value: string; unit: "kg" | "lb"; kilograms: string};
 export type PerformedSet = {id: string; set_number: number; repetitions: number; load: Load | null; notes: string | null};
 export type Exercise = {id: string; name: string; normalized_name: string};
+export type CreateExerciseResult = {exercise: Exercise; created: boolean};
 export type WorkoutExercise = {id: string; exercise: Exercise; position: number; notes: string | null; sets: PerformedSet[]};
 export type ProgramWorkout = {id: string; day_number: number; alias: string; notes: string | null; active: boolean};
 export type Workout = {id: string; user_id: string; performed_on: string; status: "draft" | "completed"; notes: string | null; created_at: string; completed_at: string | null; program_workout: ProgramWorkout | null; exercises: WorkoutExercise[]};
@@ -72,6 +73,7 @@ function withPeriod(path: string, period: StatisticsPeriod): string {
 export const historyApi = {
   workouts: (limit: number, cursor?: string) => api<WorkoutPage>(withCursor("/api/me/workouts", limit, cursor)),
   exercises: () => api<ExerciseCatalog>("/api/me/exercises"),
+  createExercise: (name: string) => api<CreateExerciseResult>("/api/me/exercises", {method: "POST", body: JSON.stringify({name})}),
   exerciseHistory: (exerciseId: string, limit: number, cursor?: string) => api<ExerciseHistoryPage>(withCursor(`/api/me/exercises/${exerciseId}/history`, limit, cursor)),
   overviewStatistics: (period: StatisticsPeriod) => api<OverviewStatistics>(withPeriod("/api/me/statistics/overview", period)),
   exerciseStatistics: (exerciseId: string, period: StatisticsPeriod) => api<ExerciseStatistics>(withPeriod(`/api/me/exercises/${exerciseId}/statistics`, period)),

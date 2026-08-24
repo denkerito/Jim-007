@@ -171,6 +171,22 @@ class ExerciseResponse(ApiModel):
     normalized_name: str
 
 
+class CreateExerciseRequest(ApiModel):
+    name: str = Field(min_length=1, max_length=4096)
+
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("exercise name must not be blank")
+        return value
+
+
+class CreateExerciseResponse(ApiModel):
+    exercise: ExerciseResponse
+    created: bool
+
+
 class ExerciseListResponse(ApiModel):
     items: tuple[ExerciseResponse, ...]
 

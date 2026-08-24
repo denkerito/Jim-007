@@ -20,12 +20,12 @@ from app.application.commands import (
     UndoWorkoutMessageResult,
 )
 from app.application.idempotency import CommandOperation, claim_or_replay, verify_replay
+from app.application.exercises import create_or_get_exercise
 from app.application.ports import ProcessedCommand, UnitOfWork, UnitOfWorkFactory
 from app.domain.exceptions import (
     ActiveWorkoutExistsError,
     IdempotencyConflictError,
     InvalidWorkoutDateError,
-    InvalidWorkoutStateError,
     NoActiveWorkoutError,
     NotFoundError,
     NothingToUndoError,
@@ -39,7 +39,7 @@ from app.domain.models import (
     WorkoutStatus,
     WorkoutLogClarificationStatus,
 )
-from app.domain.normalization import clean_required_text, normalize_exercise_name
+from app.domain.normalization import clean_required_text
 
 
 def _clean_optional_text(value: str | None) -> str | None:
@@ -168,15 +168,12 @@ async def _append_exercise(
         if exercise is None:
             raise NotFoundError("Exercise not found")
     else:
-        name = clean_required_text(reference.name)
-        if not name:
-            raise InvalidWorkoutStateError("Exercise name must not be blank")
-        exercise = await uow.exercises.get_or_create(
-            exercise_id=uuid4(),
+        exercise_result = await create_or_get_exercise(
+            uow=uow,
             user_id=user_id,
-            name=name,
-            normalized_name=normalize_exercise_name(name),
+            name=reference.name,
         )
+        exercise = exercise_result.exercise
 
     set_values = tuple(
         (

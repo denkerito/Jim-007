@@ -1,12 +1,14 @@
-"""Session-authenticated read APIs for the web application."""
+"""Session-authenticated workout history and exercise catalog APIs."""
 
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.api.dependencies import UowFactory
 from app.api.schemas import (
+    CreateExerciseRequest,
+    CreateExerciseResponse,
     ExerciseHistoryPageResponse,
     ExerciseListResponse,
     ExerciseResponse,
@@ -14,7 +16,8 @@ from app.api.schemas import (
     exercise_history_page_response,
     workout_history_page_response,
 )
-from app.api.web_security import WebAuth
+from app.api.web_security import WebAuth, WebAuthCsrf, require_safe_public_mutation
+from app.application.exercises import CreateExercise
 from app.application.history import (
     ListExerciseCatalog,
     ListExerciseHistory,
@@ -51,6 +54,41 @@ async def list_my_exercises(
             )
             for item in exercises
         )
+    )
+
+
+@router.post(
+    "/exercises",
+    response_model=CreateExerciseResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        status.HTTP_200_OK: {
+            "model": CreateExerciseResponse,
+            "description": "The normalized exercise already existed.",
+        }
+    },
+    dependencies=[Depends(require_safe_public_mutation)],
+)
+async def create_my_exercise(
+    request: CreateExerciseRequest,
+    response: Response,
+    context: WebAuthCsrf,
+    uow_factory: UowFactory,
+) -> CreateExerciseResponse:
+    result = await CreateExercise(uow_factory).execute(
+        user_id=context.user_id,
+        name=request.name,
+    )
+    if not result.created:
+        response.status_code = status.HTTP_200_OK
+    exercise = result.exercise
+    return CreateExerciseResponse(
+        exercise=ExerciseResponse(
+            id=exercise.id,
+            name=exercise.name,
+            normalized_name=exercise.normalized_name,
+        ),
+        created=result.created,
     )
 
 

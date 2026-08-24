@@ -165,7 +165,7 @@ class ExerciseRepository(Protocol):
 
     async def get_or_create(
         self, *, exercise_id: UUID, user_id: UUID, name: str, normalized_name: str
-    ) -> Exercise: ...
+    ) -> tuple[Exercise, bool]: ...
 
 
 class WorkoutRepository(Protocol):

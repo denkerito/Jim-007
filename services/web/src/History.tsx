@@ -1,12 +1,12 @@
-import {ReactNode, useMemo, useState} from "react";
+import {FormEvent, ReactNode, useMemo, useState} from "react";
 import {NavLink, useParams} from "react-router-dom";
-import {useInfiniteQuery, useQuery} from "@tanstack/react-query";
+import {useInfiniteQuery, useMutation, useQuery, useQueryClient} from "@tanstack/react-query";
 import {
   Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer,
   Tooltip, XAxis, YAxis,
 } from "recharts";
 import {
-  ApiError, ExerciseStatistics, historyApi, MassMetric, OverviewStatistics,
+  ApiError, ExerciseCatalog, ExerciseStatistics, historyApi, MassMetric, OverviewStatistics,
   StatisticsPeriod, VolumeMetric, Workout, WorkoutExercise,
 } from "./api";
 
@@ -68,9 +68,14 @@ export function WorkoutsPage() {
 }
 
 export function ExercisesPage() {
-  const [search,setSearch]=useState("");const query=useQuery({queryKey:["exercises"],queryFn:historyApi.exercises});
+  const queryClient=useQueryClient();const [search,setSearch]=useState("");const [formOpen,setFormOpen]=useState(false);const [name,setName]=useState("");const [notice,setNotice]=useState("");
+  const query=useQuery({queryKey:["exercises"],queryFn:historyApi.exercises});
+  const creation=useMutation({mutationFn:()=>historyApi.createExercise(name),onSuccess:result=>{queryClient.setQueryData<ExerciseCatalog>(["exercises"],current=>{const items=[...(current?.items??[]).filter(item=>item.id!==result.exercise.id),result.exercise];items.sort((left,right)=>left.name.localeCompare(right.name,"en",{sensitivity:"base"}));return {items}});setName("");setSearch("");setFormOpen(false);setNotice(result.created?"Exercise added to your library.":"That exercise is already in your library.")}});
+  const openForm=()=>{creation.reset();setNotice("");setFormOpen(true)};
+  const cancelForm=()=>{creation.reset();setName("");setFormOpen(false)};
+  const submit=(event:FormEvent)=>{event.preventDefault();if(name.trim()&&!creation.isPending)creation.mutate()};
   const items=useMemo(()=>{const term=search.trim().toLocaleLowerCase();return (query.data?.items??[]).filter(item=>item.name.toLocaleLowerCase().includes(term))},[query.data,search]);
-  return <section className="mx-auto max-w-5xl px-6 py-10"><PageHeader eyebrow="Exercise library" title="Exercises" description="Find an exercise and review its complete training history."/><div className="mt-8"><label className="block"><span className="label">Search exercises</span><input type="search" placeholder="e.g. Bench Press" value={search} onChange={event=>setSearch(event.target.value)}/></label></div><div className="mt-8">{query.isLoading?<LoadingCards/>:query.error?<QueryError error={query.error} retry={()=>void query.refetch()}/>:query.data?.items.length===0?<div className="card text-center"><h2 className="text-2xl font-bold">No exercises yet</h2><p className="mt-2 text-moss">Exercises will appear after they are added to your training log.</p></div>:items.length===0?<p className="card text-center text-moss">No exercises match “{search}”.</p>:<div className="grid gap-3 sm:grid-cols-2">{items.map(item=><NavLink key={item.id} to={`/exercises/${item.id}`} className="card group flex items-center justify-between"><span className="font-bold group-hover:underline">{item.name}</span><span aria-hidden="true">→</span></NavLink>)}</div>}</div></section>;
+  return <section className="mx-auto max-w-5xl px-6 py-10"><div className="flex flex-wrap items-end justify-between gap-5"><PageHeader eyebrow="Exercise library" title="Exercises" description="Find an exercise and review its complete training history."/>{!formOpen&&<button className="button" type="button" onClick={openForm}>Add exercise</button>}</div>{formOpen&&<form className="card mt-8" onSubmit={submit}><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="eyebrow">New exercise</p><h2 className="mt-1 text-2xl font-bold">Add to your library</h2></div><button className="text-sm font-bold underline" type="button" disabled={creation.isPending} onClick={cancelForm}>Cancel</button></div><label className="label mt-5" htmlFor="exercise-name">Exercise name</label><input id="exercise-name" aria-describedby="exercise-name-help" autoFocus required maxLength={255} placeholder="e.g. Bench Press" value={name} onChange={event=>setName(event.target.value)}/><span id="exercise-name-help" className="mt-1 block text-xs text-moss">Use a clear, recognisable name.</span>{creation.error&&<p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{creation.error instanceof ApiError?creation.error.message:"We could not add this exercise. Please try again."}</p>}<button className="button mt-5" disabled={!name.trim()||creation.isPending}>{creation.isPending?"Saving…":"Save exercise"}</button></form>}{notice&&<p role="status" className="mt-8 rounded-2xl bg-lime/30 p-4 font-bold">{notice}</p>}<div className="mt-8"><label className="block"><span className="label">Search exercises</span><input type="search" placeholder="e.g. Bench Press" value={search} onChange={event=>setSearch(event.target.value)}/></label></div><div className="mt-8">{query.isLoading?<LoadingCards/>:query.error?<QueryError error={query.error} retry={()=>void query.refetch()}/>:query.data?.items.length===0?<div className="card text-center"><h2 className="text-2xl font-bold">No exercises yet</h2><p className="mt-2 text-moss">Add an exercise here or include one in your training log.</p></div>:items.length===0?<p className="card text-center text-moss">No exercises match “{search}”.</p>:<div className="grid gap-3 sm:grid-cols-2">{items.map(item=><NavLink key={item.id} to={`/exercises/${item.id}`} className="card group flex items-center justify-between"><span className="font-bold group-hover:underline">{item.name}</span><span aria-hidden="true">→</span></NavLink>)}</div>}</div></section>;
 }
 
 function ExerciseProgress({data}: {data:ExerciseStatistics}) {
